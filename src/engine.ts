@@ -13,6 +13,7 @@ import type { SettingsDescriptorLike, SettingsPathOpLike, SettingsService } from
 import { clearJournal, journalIncomplete, readJournal, writeJournal, type Journal } from './journal.js'
 import { applyDecisions, classify, diffOps, lineDiff, mergeMaps } from './merge.js'
 import {
+  assertSelectedSkills,
   assertSyncDir,
   fileSpec,
   parseItemId,
@@ -38,9 +39,20 @@ import {
   type SnapshotItem,
   type Status,
   type SyncPlan,
+  type SkillScan,
+  type SkillValue,
 } from './protocol.js'
 import { assertClean, scanText, type Finding } from './secret-scan.js'
 import { hasVolatile, projectVolatile } from './settings.js'
+import { importClaudeSkills, scanClaudeSkills } from './import/claude.js'
+import {
+  assertSkillValue,
+  copyDirSafe,
+  readSkillDir,
+  resolveSkillsRoot,
+  skillHash,
+  writeSkillDir,
+} from './skills.js'
 import {
   bagPaths,
   defaultState,
@@ -168,6 +180,7 @@ export class SyncEngine {
       counts: {
         selectedNamespaces: config.selectedNamespaces.length,
         selectedFiles: config.selectedFiles.length,
+        selectedSkills: config.selectedSkills.length,
         localItems,
         remoteItems,
         remoteDevices,
@@ -204,6 +217,31 @@ export class SyncEngine {
         live: hasVolatile(descriptor.schema),
       }))
       .sort((a, b) => a.ns.localeCompare(b.ns))
+  }
+
+  /** Read-only scan of Claude Code's user-level skills. */
+  async scanSkills(): Promise<SkillScan> {
+    return scanClaudeSkills()
+  }
+
+  /** Copy selected Claude Code skills into this machine's configured skills root. */
+  async importSkills(names: unknown): Promise<{
+    imported: string[]
+    skipped: Array<{ name: string; reason: string }>
+    target: string
+  }> {
+    const selected = assertSelectedSkills(names)
+    const config = await this.loadConfig()
+    const target = resolveSkillsRoot(this.home, config.skillRoot)
+    const result = await importClaudeSkills(selected, target)
+    if (result.imported.length > 0) {
+      const next: PersistedConfig = {
+        ...config,
+        selectedSkills: [...new Set([...config.selectedSkills, ...result.imported])],
+      }
+      await saveConfig(this.paths, next)
+    }
+    return { ...result, target }
   }
 
   async plan(): Promise<SyncPlan> {
@@ -283,9 +321,10 @@ export class SyncEngine {
       const local = capture.items.get(id)
       const rem = remote.items.get(id)
       const base = state.base.items[id]
-      const kind: ItemKind = local?.kind ?? (parsed.kind === 'settings' ? 'settings' : 'file')
-      const cls: ItemClass = local?.cls ?? rem?.cls ?? 'safe-live'
-      const label = local?.label ?? (parsed.kind === 'file' ? parsed.spec.label : parsed.ns)
+      const kind: ItemKind = local?.kind ?? parsed.kind
+      const cls: ItemClass = local?.cls ?? rem?.cls ?? (kind === 'skill' ? 'executable' : 'safe-live')
+      const label = local?.label
+        ?? (parsed.kind === 'file' ? parsed.spec.label : parsed.kind === 'settings' ? parsed.ns : parsed.name)
 
       let relation: ItemRelation = classify(local?.hash, rem?.hash, base?.hash)
       if (rem !== undefined && local !== undefined && state.rejected[id] === rem.hash) {
@@ -310,7 +349,7 @@ export class SyncEngine {
           else if (!deepEqual(merged, local.value)) relation = 'mergeable'
           else relation = 'local-only'
         }
-      } else if (kind === 'file' && relation === 'conflict') {
+      } else if ((kind === 'file' || kind === 'skill') && relation === 'conflict') {
         conflicts = [{ path: [] }]
         merged = local?.value
       }
@@ -328,6 +367,8 @@ export class SyncEngine {
         const before = typeof local?.value === 'string' ? local.value : ''
         const after = typeof merged === 'string' ? merged : ''
         preview = lineDiff(before, after).slice(0, 8000)
+      } else if (writes && kind === 'skill') {
+        preview = skillPreview(local?.value, merged)
       }
 
       items.push({
@@ -342,7 +383,7 @@ export class SyncEngine {
         ...(preview === undefined ? {} : { preview }),
         ...(conflicts.length === 0 ? {} : { conflicts: conflicts.map(conflict => ({ path: conflict.path })) }),
         writes,
-        ...(kind === 'settings' && parsed.kind === 'settings' ? { revision: capture.revisions.get(parsed.ns) } : {}),
+        ...(parsed.kind === 'settings' ? { revision: capture.revisions.get(parsed.ns) } : {}),
       })
     }
 
@@ -424,6 +465,27 @@ export class SyncEngine {
         })
         continue
       }
+      if (parsed.kind === 'skill') {
+        let value: SkillValue
+        try {
+          value = assertSkillValue(entry.value)
+        } catch (error) {
+          warnings.push(`skill ignored (${parsed.name}): ${messageOf(error)}`)
+          continue
+        }
+        for (const [rel, file] of Object.entries(value.files)) {
+          if (file.encoding === 'utf8') assertClean(scanText(`skill:${value.name}:${rel}`, file.data))
+        }
+        items.set(id, {
+          id,
+          hash: skillHash(value),
+          cls: 'executable',
+          value,
+          updatedAt,
+          device: 'bundle',
+        })
+        continue
+      }
       if (typeof entry.value !== 'string') {
         warnings.push(`file ignored (not text): ${parsed.spec.rel}`)
         continue
@@ -453,20 +515,25 @@ export class SyncEngine {
     const config = await this.loadConfig()
     const namespaces = new Set(config.selectedNamespaces)
     const files = new Set(config.selectedFiles)
+    const skills = new Set(config.selectedSkills)
     const remote = await entry.readRemote()
     for (const id of remote.items.keys()) {
       const parsed = parseItemId(id)
       if (parsed === undefined) continue
       if (parsed.kind === 'settings') namespaces.add(parsed.ns)
+      else if (parsed.kind === 'skill') skills.add(parsed.name)
       else files.add(id)
     }
-    if (namespaces.size === config.selectedNamespaces.length && files.size === config.selectedFiles.length) {
+    if (namespaces.size === config.selectedNamespaces.length
+      && files.size === config.selectedFiles.length
+      && skills.size === config.selectedSkills.length) {
       return config
     }
     const next: PersistedConfig = {
       ...config,
       selectedNamespaces: [...namespaces],
       selectedFiles: [...files],
+      selectedSkills: [...skills],
     }
     await saveConfig(this.paths, next)
     return next
@@ -518,6 +585,7 @@ export class SyncEngine {
     const rejectedNext = { ...stateBefore.rejected }
 
     const fileWrites: Array<{ id: string; specRel: string; text: string }> = []
+    const dirWrites: Array<{ id: string; name: string; value: SkillValue }> = []
     const settingsWrites: Array<{
       id: string
       ns: string
@@ -586,6 +654,12 @@ export class SyncEngine {
         fileWrites.push({ id: item.id, specRel: parsed.spec.rel, text })
         if (item.cls === 'restart') restartRequired.push(item.id)
         if (item.id === 'file:profiles/web/package.json') installRequired.push(item.id)
+      } else if (target.kind === 'skill') {
+        const value = assertSkillValue(finalValue)
+        for (const [rel, file] of Object.entries(value.files)) {
+          if (file.encoding === 'utf8') assertClean(scanText(`skill:${value.name}:${rel}`, file.data))
+        }
+        dirWrites.push({ id: item.id, name: value.name, value })
       } else {
         const parsed = parseItemId(item.id)
         if (parsed?.kind !== 'settings') continue
@@ -614,7 +688,7 @@ export class SyncEngine {
       throw new SyncError('executable', `${executableBlocked} executable change(s) need explicit confirmation`)
     }
 
-    if (fileWrites.length === 0 && settingsWrites.length === 0) {
+    if (fileWrites.length === 0 && settingsWrites.length === 0 && dirWrites.length === 0) {
       const finalConfig = entry.source === 'bundle' ? await this.adoptBundleSelection(entry) : config
       const state = await this.loadState()
       state.base.items = entry.source === 'bundle' ? pruneBase(baseNext, finalConfig) : baseNext
@@ -632,6 +706,7 @@ export class SyncEngine {
       startedAt: new Date().toISOString(),
       status: 'APPLYING',
       files: [],
+      dirs: [],
       settings: settingsWrites.map(write => ({
         ns: write.ns,
         expectedRevision: write.revision,
@@ -655,6 +730,17 @@ export class SyncEngine {
         existed: before !== undefined,
       })
     }
+    if (dirWrites.length > 0) {
+      const root = resolveSkillsRoot(this.home, config.skillRoot)
+      for (const write of dirWrites) {
+        const livePath = join(root, write.name)
+        const backupPath = join(this.paths.backups, operationId, 'skills', write.name)
+        const info = await stat(livePath).catch(() => undefined)
+        const existed = info !== undefined && info.isDirectory()
+        if (existed) await copyDirSafe(livePath, backupPath)
+        journal.dirs!.push({ id: write.id, livePath, backupPath, existed })
+      }
+    }
     await ensureDir(this.paths.stateDir)
     await writeJournal(this.paths.journal, journal)
 
@@ -666,6 +752,13 @@ export class SyncEngine {
         await writeAtomic(livePath, write.text)
         applied.push(write.id)
       }
+      if (dirWrites.length > 0) {
+        const root = resolveSkillsRoot(this.home, config.skillRoot)
+        for (const write of dirWrites) {
+          await writeSkillDir(root, write.value)
+          applied.push(write.id)
+        }
+      }
       if (settingsWrites.length > 0) {
         if (this.settings === undefined) throw new SyncError('settings', 'the settings service is unavailable')
         for (const write of settingsWrites) {
@@ -673,7 +766,7 @@ export class SyncEngine {
           applied.push(write.id)
         }
       }
-      await this.verify(config, fileWrites, settingsWrites)
+      await this.verify(config, fileWrites, settingsWrites, dirWrites)
     } catch (error) {
       const restored = await this.rollback(journal)
       const state = await this.loadState()
@@ -706,7 +799,7 @@ export class SyncEngine {
       const finalValue = finalValues.get(item.id)
       if (finalValue === undefined) continue
       baseNext[item.id] = {
-        hash: sha256(typeof finalValue === 'string' ? normalizeText(finalValue) : canonicalJson(finalValue)),
+        hash: hashItemValue(item.kind, finalValue),
         cls: item.cls,
         value: finalValue,
         updatedAt: Date.now(),
@@ -874,6 +967,12 @@ export class SyncEngine {
         const parsed = parseItemId(id)
         return parsed?.kind === 'file' ? [id] : []
       })
+    const skillNames = only === undefined
+      ? config.selectedSkills
+      : [...only].flatMap(id => {
+        const parsed = parseItemId(id)
+        return parsed?.kind === 'skill' ? [parsed.name] : []
+      })
 
     if (namespaces.length > 0) {
       if (this.settings === undefined) {
@@ -939,6 +1038,32 @@ export class SyncEngine {
       items.set(id, { id, kind: 'file', cls: spec.cls, hash: sha256(text), value: text, label: spec.label })
     }
 
+    if (skillNames.length > 0) {
+      const root = resolveSkillsRoot(this.home, config.skillRoot)
+      for (const name of skillNames) {
+        try {
+          const value = await readSkillDir(root, name)
+          if (value === undefined) {
+            warnings.push(`skill "${name}" is not present in ${root}`)
+            continue
+          }
+          for (const [rel, file] of Object.entries(value.files)) {
+            if (file.encoding === 'utf8') findings.push(...scanText(`skill:${name}:${rel}`, file.data))
+          }
+          items.set(`skill:${name}`, {
+            id: `skill:${name}`,
+            kind: 'skill',
+            cls: 'executable',
+            hash: skillHash(value),
+            value,
+            label: name,
+          })
+        } catch (error) {
+          warnings.push(`could not read skill ${name}: ${messageOf(error)}`)
+        }
+      }
+    }
+
     return { items, warnings, findings, revisions, schemas }
   }
 
@@ -955,11 +1080,21 @@ export class SyncEngine {
     config: PersistedConfig,
     files: Array<{ id: string; specRel: string; text: string }>,
     settingsWrites: Array<{ id: string; ns: string; expected: unknown }>,
+    dirs: Array<{ id: string; name: string; value: SkillValue }>,
   ): Promise<void> {
     for (const write of files) {
       const text = normalizeText(await readFile(join(this.home, write.specRel), 'utf8'))
       if (sha256(text) !== sha256(write.text)) {
         throw new SyncError('verify', `write verification failed for ${write.specRel}`)
+      }
+    }
+    if (dirs.length > 0) {
+      const root = resolveSkillsRoot(this.home, config.skillRoot)
+      for (const write of dirs) {
+        const current = await readSkillDir(root, write.name)
+        if (current === undefined || skillHash(current) !== skillHash(write.value)) {
+          throw new SyncError('verify', `skill verification failed for ${write.name}`)
+        }
       }
     }
     if (settingsWrites.length > 0 && this.settings !== undefined) {
@@ -990,6 +1125,15 @@ export class SyncEngine {
       } catch (error) {
         ok = false
         this.logger?.warn(`[dsh-bag] could not restore ${file.livePath}: ${messageOf(error)}`)
+      }
+    }
+    for (const dir of [...(journal.dirs ?? [])].reverse()) {
+      try {
+        await rm(dir.livePath, { recursive: true, force: true })
+        if (dir.existed) await copyDirSafe(dir.backupPath, dir.livePath)
+      } catch (error) {
+        ok = false
+        this.logger?.warn(`[dsh-bag] could not restore ${dir.livePath}: ${messageOf(error)}`)
       }
     }
     if (this.settings !== undefined) {
@@ -1035,6 +1179,7 @@ function pruneBase<T>(base: Record<string, T>, config: PersistedConfig): Record<
   const keep = new Set<string>([
     ...config.selectedNamespaces.map(settingsItemId),
     ...config.selectedFiles,
+    ...config.selectedSkills.map(name => `skill:${name}`),
   ])
   const out: Record<string, T> = {}
   for (const [id, value] of Object.entries(base)) if (keep.has(id)) out[id] = value
@@ -1045,6 +1190,7 @@ function pruneRejected(rejected: Record<string, string>, config: PersistedConfig
   const keep = new Set<string>([
     ...config.selectedNamespaces.map(settingsItemId),
     ...config.selectedFiles,
+    ...config.selectedSkills.map(name => `skill:${name}`),
   ])
   const out: Record<string, string> = {}
   for (const [id, value] of Object.entries(rejected)) if (keep.has(id)) out[id] = value
@@ -1074,6 +1220,37 @@ function isTakeRemote(decisions: ReadonlyMap<string, 'keep-local' | 'take-remote
 
 function remoteValue(remote: RemoteSnapshot, id: string): unknown {
   return remote.items.get(id)?.value
+}
+
+function hashItemValue(kind: ItemKind, value: unknown): string {
+  if (kind === 'skill') return skillHash(assertSkillValue(value))
+  if (kind === 'file') return sha256(normalizeText(String(value ?? '')))
+  return sha256(canonicalJson(value))
+}
+
+function asSkill(value: unknown): SkillValue | undefined {
+  if (value === null || typeof value !== 'object') return undefined
+  const candidate = value as Partial<SkillValue>
+  if (typeof candidate.name !== 'string') return undefined
+  if (candidate.files === null || typeof candidate.files !== 'object' || Array.isArray(candidate.files)) return undefined
+  return candidate as SkillValue
+}
+
+function skillPreview(before: unknown, after: unknown): string {
+  const next = asSkill(after)
+  if (next === undefined) return ''
+  const previous = asSkill(before)
+  const lines: string[] = [`skill ${next.name}`]
+  const previousFiles = previous?.files ?? {}
+  for (const rel of Object.keys(next.files).sort()) {
+    const prior = previousFiles[rel]
+    if (prior === undefined) lines.push(`+ ${rel}`)
+    else if (prior.hash !== next.files[rel]!.hash) lines.push(`~ ${rel}`)
+  }
+  for (const rel of Object.keys(previousFiles).sort()) {
+    if (next.files[rel] === undefined) lines.push(`- ${rel}`)
+  }
+  return lines.join('\n').slice(0, 8000)
 }
 
 async function readOptional(path: string): Promise<string | undefined> {

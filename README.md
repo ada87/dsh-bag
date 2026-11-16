@@ -1,10 +1,18 @@
 # dsh-bag
 
-Portable config sync for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`).
+Portable capability packs for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`).
 
-Put the settings and profile files you choose into **a folder you already sync** — iCloud Drive, OneDrive, Dropbox, Syncthing, a NAS share — and another machine opens it with the same configuration. No account, no server, no telemetry.
+Bring agent capabilities in from elsewhere, keep them in one synced folder, and hand them to every dsh machine. Sessions and context stay local. No account, no server, no telemetry.
 
-> 把选中的 dsh 设置和配置文件装进一个你已经在同步的文件夹，换台机器打开就有。不需要账号，不需要服务器。
+> 把别处的 agent 能力装进袋子，带到所有 dsh。会话和上下文留在原地。
+
+Three layers:
+
+```
+Import            Pack                    Deliver
+Claude Code  →    skills / settings  →    folder / Git / .dshbag
+skills            presets / hooks          Door Cloud (later)
+```
 
 ## Install
 
@@ -16,13 +24,29 @@ Restart `dsh web`, then open **Settings → Bag**.
 
 ## Quick start
 
+### Import skills from Claude Code
+
+- Open **Settings → Bag → Skills → Scan Claude Code**.
+- Review the compatibility badges; import the selected directories into `~/.dsh/skills` (or `~/.agents/skills` if you choose the shared root).
+- Or use chat:
+
+```text
+/bag scan
+/bag import pdf-tools deploy-helper
+/bag status
+```
+
+Imported skills are added to the capability pack automatically.
+
+### Sync the pack
+
 1. Enter an absolute **sync folder** outside the dsh home, for example `D:\sync\dsh-bag` or `~/Sync/dsh-bag`.
-2. Tick the settings namespaces and profile files you want to travel.
+2. Tick the settings namespaces, profile files and skills you want to travel.
 3. **Save**.
 4. On the source machine press **Publish this machine**.
 5. On another machine press **Compare**, review, then **Apply**.
 
-The sync folder is a normal folder. Any file-sync tool works, including one that only copies files and knows nothing about conflicts.
+Skills and patches are executable changes: applying them requires the explicit confirmation checkbox.
 
 ### Encrypted backup file
 
@@ -31,12 +55,13 @@ The same selection can travel as one password-encrypted `.dshbag` file:
 - **Export .dshbag** — PBKDF2-SHA256 (600k iterations) + AES-256-GCM.
 - **Import and compare** — decrypt, validate against the allowlist, and show the same plan as a folder compare. Nothing is written until you press Apply.
 
-The file holds only settings and profile files; credentials are never captured. A lost password cannot be recovered.
+The file holds only skills, settings and profile files; credentials are never captured. A lost password cannot be recovered.
 
 ## What travels
 
 | Item | Default | Notes |
 |---|---|---|
+| **Skills** (`~/.dsh/skills/<name>/`) | off | Atomic directory snapshots; text and base64 files; executable confirmation. |
 | Selected settings namespaces | off | Only fields beneath a schema-declared `volatile` node travel — the ones dsh accepts as live writes. Secret-declared fields are redacted before capture and never uploaded. |
 | `profiles/web/package.json` | off | Plugin list; needs a restart. |
 | `profiles/web/cordis.patch.yml` | off | Executable; requires explicit confirmation. |
@@ -56,6 +81,14 @@ ui-theme: preference
 ```
 
 They are stripped before capture and are never overwritten by a peer.
+
+### Import from other agents (v1: Claude Code)
+
+- Scans `~/.claude/skills` (honors `CLAUDE_CONFIG_DIR`) for `<name>/SKILL.md` directory bundles.
+- Reports compatibility issues: missing frontmatter, Claude-only tools, absolute paths, `allowed-tools`.
+- Copies selected skills into `~/.dsh/skills` by default, or `~/.agents/skills` when “share with other agents” is chosen.
+- Never overwrites an existing skill with a different hash; re-importing the same content is a no-op.
+- Flat `<name>.md` skills, MCP servers, presets and hooks are not imported in this version.
 
 ## How it works
 
@@ -82,7 +115,9 @@ They are stripped before capture and are never overwritten by a peer.
 
 ## v1 limitations
 
+- **Import is Claude Code skills only.** MCP servers, user presets, hooks and flat `<name>.md` skills are deferred.
 - **Folder backend only.** Git and WebDAV backends are intentionally deferred; the engine is written behind a small backend seam.
+- **Whole-skill deletion is not propagated.** File-level changes inside a skill merge; removing a selected skill from every machine is manual.
 - **One backup file, no history.** A `.dshbag` is a snapshot; exporting again does not keep older bundles.
 - **Live settings only.** A settings namespace is selectable only when its schema declares at least one `volatile` field, because that is what `ctx.settings.mutate()` accepts. Settings that require a restart are disabled in the picker.
 - **Deletions.** Removing a key inside a settings namespace propagates (it is part of the merge). Removing a whole file does not: a machine that lacks a selected file simply receives it.
@@ -101,6 +136,8 @@ All routes except `/dsh-bag/health` require a trusted request.
 | PUT | `/dsh-bag/api/config` | Patch `syncDir`, selections, local-only keys, device name |
 | GET | `/dsh-bag/api/namespaces` | Settings namespaces in this profile |
 | GET | `/dsh-bag/api/files` | Enumerated profile files |
+| GET | `/dsh-bag/api/import/scan` | Read-only Claude Code skill scan |
+| POST | `/dsh-bag/api/import/skills` | Import selected skills into the configured root |
 | POST | `/dsh-bag/api/plan` | Compare and return a plan |
 | POST | `/dsh-bag/api/apply` | Apply a plan (optional per-path decisions, `allowExecutable`) |
 | POST | `/dsh-bag/api/push` | Publish this machine's snapshot |
@@ -118,8 +155,10 @@ npm test          # build + unit and two-machine engine tests
 ```
 
 ```
-src/index.ts      plugin entry and route registration
+src/index.ts      plugin entry, route registration and /bag command
 src/engine.ts     capture / plan / apply / push / doctor / recover
+src/skills.ts     skill directory snapshots and safe writes
+src/import/       Claude Code scan + import adapters
 src/backend.ts    folder backend (device snapshots)
 src/merge.ts      three-way merge, path edits, preview diff
 src/policy.ts     item allowlist and path validation

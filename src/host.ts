@@ -73,6 +73,20 @@ export interface SettingsService {
   mutate(ns: string, ops: readonly SettingsPathOpLike[], expectedRevision?: number): Promise<void>
 }
 
+export interface CommandResultLike {
+  kind: 'success' | 'error'
+  text?: string
+}
+
+export interface CommandRuntimeLike {
+  register(definition: {
+    name: string
+    description: string
+    input?: { hint: string }
+    handler: (invocation: { rawInput: string }) => CommandResultLike | Promise<CommandResultLike>
+  }): () => void
+}
+
 export interface HostContext {
   webServer?: WebServerService
   settings?: SettingsService

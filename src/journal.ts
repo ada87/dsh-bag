@@ -19,6 +19,13 @@ export interface JournalSettingsEntry {
   compensation: SettingsPathOpLike[]
 }
 
+export interface JournalDirEntry {
+  id: string
+  livePath: string
+  backupPath: string
+  existed: boolean
+}
+
 export interface Journal {
   schemaVersion: 1
   operationId: string
@@ -26,6 +33,7 @@ export interface Journal {
   startedAt: string
   status: 'APPLYING' | 'DONE'
   files: JournalFileEntry[]
+  dirs?: JournalDirEntry[]
   settings: JournalSettingsEntry[]
 }
 

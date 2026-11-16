@@ -43,6 +43,17 @@ window.__ModuleLoader__.load({
       planSource: '来源',
       sourceFolder: '同步文件夹',
       sourceBundle: '备份文件',
+      skillsTitle: 'Skills',
+      skillsHint: '只同步勾选的 skill 目录。Claude Code 的 skill 目录格式和 dsh 基本一致。',
+      skillRootDsh: 'dsh 专属（~/.dsh/skills）',
+      skillRootAgents: '共享给其他 agent（~/.agents/skills）',
+      importScan: '扫描 Claude Code',
+      importSelected: '导入所选',
+      noSkills: '还没有选中任何 skill',
+      compatible: '兼容',
+      needsReview: '需审查',
+      importedSummary: '已导入 {count} 个 skill',
+      scanRoot: '扫描位置',
       compare: '比较',
       apply: '应用',
       push: '发布本机',
@@ -53,7 +64,7 @@ window.__ModuleLoader__.load({
       journal: '上次写入',
       journalBad: '未完成，需要修复',
       journalOk: '正常',
-      counts: '本地 {local} 项 · 远端 {remote} 项 · {devices} 台设备',
+      counts: '本地 {local} 项 · 远端 {remote} 项 · {devices} 台设备 · {skills} 个 skill',
       last: '上次操作',
       plan: '比较结果',
       noPlan: '还没有比较。先保存，再点「比较」。',
@@ -111,6 +122,17 @@ window.__ModuleLoader__.load({
       planSource: 'Source',
       sourceFolder: 'Sync folder',
       sourceBundle: 'Backup file',
+      skillsTitle: 'Skills',
+      skillsHint: 'Only checked skill directories travel. Claude Code\'s skill layout is close to dsh\'s.',
+      skillRootDsh: 'dsh only (~/.dsh/skills)',
+      skillRootAgents: 'Share with other agents (~/.agents/skills)',
+      importScan: 'Scan Claude Code',
+      importSelected: 'Import selected',
+      noSkills: 'No skill is selected yet',
+      compatible: 'compatible',
+      needsReview: 'needs review',
+      importedSummary: 'Imported {count} skill(s)',
+      scanRoot: 'Scanning',
       compare: 'Compare',
       apply: 'Apply',
       push: 'Publish this machine',
@@ -121,7 +143,7 @@ window.__ModuleLoader__.load({
       journal: 'Last write',
       journalBad: 'unfinished, repair required',
       journalOk: 'clean',
-      counts: '{local} local · {remote} remote · {devices} device(s)',
+      counts: '{local} local · {remote} remote · {devices} device(s) · {skills} skill(s)',
       last: 'Last operation',
       plan: 'Comparison',
       noPlan: 'Nothing compared yet. Save, then press Compare.',
@@ -280,6 +302,8 @@ window.__ModuleLoader__.load({
       const [importPassword, setImportPassword] = useState('')
       const [importText, setImportText] = useState('')
       const [importName, setImportName] = useState('')
+      const [importScan, setImportScan] = useState(null)
+      const [importPicks, setImportPicks] = useState({})
 
       const refresh = useCallback(async () => {
         const [nextStatus, nextConfig, nextNamespaces, nextFiles] = await Promise.all([
@@ -319,6 +343,8 @@ window.__ModuleLoader__.load({
               syncDir: draft.syncDir,
               selectedNamespaces: draft.selectedNamespaces,
               selectedFiles: draft.selectedFiles,
+              selectedSkills: draft.selectedSkills,
+              skillRoot: draft.skillRoot,
               localOnlyKeys: parseLocalOnly(draft.localOnlyText),
               intervalMinutes: draft.intervalMinutes,
               autoApplySafe: draft.autoApplySafe,
@@ -416,6 +442,29 @@ window.__ModuleLoader__.load({
         setMessage('')
       }, [])
 
+      const scanClaude = useCallback(() => run('scan', async () => {
+        const scan = await request('/import/scan')
+        setImportScan(scan)
+        const picks = {}
+        for (const item of scan.found) picks[item.name] = item.compatible
+        setImportPicks(picks)
+        setMessage('')
+      }), [run])
+
+      const importPicked = useCallback(() => run('import-skills', async () => {
+        const names = Object.entries(importPicks).filter(([, picked]) => picked).map(([name]) => name)
+        if (names.length === 0) throw new Error(t('noSkills'))
+        const result = await request('/import/skills', {
+          method: 'POST',
+          body: JSON.stringify({ names }),
+        })
+        await refresh()
+        setImportScan(null)
+        setImportPicks({})
+        setPlan(null)
+        setMessage(t('importedSummary').replace('{count}', String(result.imported.length)))
+      }), [importPicks, refresh, run, t])
+
       const toggle = useCallback((field, id) => {
         setDraft(current => {
           if (current === null) return current
@@ -453,7 +502,8 @@ window.__ModuleLoader__.load({
             h(Badge, null, t('counts')
               .replace('{local}', String(status.counts.localItems))
               .replace('{remote}', String(status.counts.remoteItems))
-              .replace('{devices}', String(status.counts.remoteDevices)))),
+              .replace('{devices}', String(status.counts.remoteDevices))
+              .replace('{skills}', String(status.counts.selectedSkills ?? 0)))),
           status.lastOperation !== null
             ? h('p', null, `${t('last')}: ${status.lastOperation.op} · ${status.lastOperation.message || ''}`)
             : null,
@@ -508,6 +558,66 @@ window.__ModuleLoader__.load({
               }),
               entry.label,
               entry.cls === 'executable' ? h('span', { className: 'dsh-bag-badge executable' }, t('clsExecutable')) : null)))),
+
+        h('div', { className: 'dsh-bag-card' },
+          h('h3', null, t('skillsTitle')),
+          h('p', null, t('skillsHint')),
+          h('div', { className: 'dsh-bag-row' },
+            h('label', null,
+              h('input', {
+                type: 'radio',
+                name: 'dsh-bag-skill-root',
+                checked: draft.skillRoot !== 'agents',
+                onChange: () => setDraft({ ...draft, skillRoot: 'dsh' }),
+              }),
+              t('skillRootDsh')),
+            h('label', null,
+              h('input', {
+                type: 'radio',
+                name: 'dsh-bag-skill-root',
+                checked: draft.skillRoot === 'agents',
+                onChange: () => setDraft({ ...draft, skillRoot: 'agents' }),
+              }),
+              t('skillRootAgents'))),
+          (draft.selectedSkills || []).length === 0
+            ? h('p', null, t('noSkills'))
+            : h('div', { className: 'dsh-bag-grid' },
+              (draft.selectedSkills || []).map(name => h('label', { key: name },
+                h('input', {
+                  type: 'checkbox',
+                  checked: true,
+                  onChange: () => toggle('selectedSkills', name),
+                }),
+                name))),
+          h('div', { className: 'dsh-bag-actions' },
+            h('button', { onClick: scanClaude, disabled: busy !== '' }, t('importScan')))),
+
+        importScan !== null
+          ? h('div', { className: 'dsh-bag-card' },
+            h('h3', null, t('importScan')),
+            h('p', null, `${t('scanRoot')}: ${importScan.root}`),
+            importScan.warnings.map((warning, index) => h('p', { key: `w${index}` }, warning)),
+            importScan.found.length === 0
+              ? h('p', null, t('noSkills'))
+              : h('div', null, importScan.found.map(item => h('div', { className: 'dsh-bag-item', key: item.name },
+                h('label', null,
+                  h('input', {
+                    type: 'checkbox',
+                    checked: importPicks[item.name] === true,
+                    onChange: () => setImportPicks({ ...importPicks, [item.name]: !importPicks[item.name] }),
+                  }),
+                  h('span', { className: 'dsh-bag-name' }, item.name),
+                  h('span', { className: `dsh-bag-badge${item.compatible ? '' : ' conflict'}` },
+                    item.compatible ? t('compatible') : t('needsReview'))),
+                item.description !== undefined ? h('p', null, item.description) : null,
+                item.issues.length > 0 ? h('p', null, item.issues.join(' · ')) : null))),
+            h('div', { className: 'dsh-bag-actions' },
+              h('button', {
+                className: 'primary',
+                onClick: importPicked,
+                disabled: busy !== '' || Object.values(importPicks).every(value => !value),
+              }, t('importSelected'))))
+          : null,
 
         h('div', { className: 'dsh-bag-card' },
           h('h3', null, t('localOnly')),

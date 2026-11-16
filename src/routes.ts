@@ -56,6 +56,15 @@ export function createHandler(deps: RouteDeps): (req: HostRequest, res: HostResp
         sendJson(res, 200, { files: FILE_SPECS.map(spec => ({ id: spec.id, label: spec.label, cls: spec.cls })) })
         return
       }
+      if (method === 'GET' && route.length === 2 && route[0] === 'import' && route[1] === 'scan') {
+        sendJson(res, 200, await deps.engine.scanSkills())
+        return
+      }
+      if (method === 'POST' && route.length === 2 && route[0] === 'import' && route[1] === 'skills') {
+        const body = (await readJson(req)) as Record<string, unknown> | undefined
+        sendJson(res, 200, await deps.engine.importSkills(body?.names))
+        return
+      }
       if (method === 'POST' && route.length === 1 && route[0] === 'plan') {
         sendJson(res, 200, await deps.engine.plan())
         return
@@ -90,13 +99,13 @@ export function createHandler(deps: RouteDeps): (req: HostRequest, res: HostResp
         return
       }
       if (method === 'POST' && route.length === 1 && route[0] === 'export') {
-        const body = (await readJson(req, 8 * 1024 * 1024)) as Record<string, unknown> | undefined
+        const body = (await readJson(req, 32 * 1024 * 1024)) as Record<string, unknown> | undefined
         const password = typeof body?.password === 'string' ? body.password : ''
         sendJson(res, 200, await deps.engine.exportBundle(password))
         return
       }
       if (method === 'POST' && route.length === 2 && route[0] === 'import' && route[1] === 'plan') {
-        const body = (await readJson(req, 8 * 1024 * 1024)) as Record<string, unknown> | undefined
+        const body = (await readJson(req, 32 * 1024 * 1024)) as Record<string, unknown> | undefined
         if (typeof body?.file !== 'string' || typeof body?.password !== 'string') {
           throw new HttpError(400, 'bad-body', 'import expects { file, password }')
         }

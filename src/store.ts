@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { mkdir, readFile } from 'node:fs/promises'
 import { writeAtomic } from './backend.js'
 import { SyncError } from './errors.js'
-import { assertLocalOnlyMap, assertSelectedFiles, assertSelectedNamespaces, assertSyncDir } from './policy.js'
+import { assertLocalOnlyMap, assertSelectedFiles, assertSelectedNamespaces, assertSelectedSkills, assertSkillRoot, assertSyncDir } from './policy.js'
 import { CONFIG_FILE, JOURNAL_FILE, SCHEMA_VERSION, STATE_DIR_NAME, STATE_FILE, type PersistedConfig, type PersistedState } from './protocol.js'
 import { isPlainObject, randomId } from './util.js'
 
@@ -38,6 +38,8 @@ export function defaultConfig(): PersistedConfig {
     syncDir: '',
     selectedNamespaces: [],
     selectedFiles: [],
+    selectedSkills: [],
+    skillRoot: 'dsh',
     localOnlyKeys: {},
     intervalMinutes: 0,
     autoApplySafe: false,
@@ -62,6 +64,8 @@ export async function loadConfig(paths: Paths): Promise<PersistedConfig> {
     syncDir: typeof raw.syncDir === 'string' ? raw.syncDir : '',
     selectedNamespaces: Array.isArray(raw.selectedNamespaces) ? raw.selectedNamespaces.filter((ns): ns is string => typeof ns === 'string') : [],
     selectedFiles: Array.isArray(raw.selectedFiles) ? raw.selectedFiles.filter((id): id is string => typeof id === 'string') : [],
+    selectedSkills: Array.isArray(raw.selectedSkills) ? raw.selectedSkills.filter((name): name is string => typeof name === 'string') : [],
+    skillRoot: raw.skillRoot === 'agents' ? 'agents' : 'dsh',
     localOnlyKeys: isPlainObject(raw.localOnlyKeys) ? (raw.localOnlyKeys as Record<string, string[]>) : {},
     intervalMinutes: typeof raw.intervalMinutes === 'number' && raw.intervalMinutes >= 0 ? Math.floor(raw.intervalMinutes) : 0,
     autoApplySafe: raw.autoApplySafe === true,
@@ -89,6 +93,12 @@ export function normalizeConfigPatch(
   }
   if (patch.selectedFiles !== undefined) {
     next.selectedFiles = assertSelectedFiles(patch.selectedFiles)
+  }
+  if (patch.selectedSkills !== undefined) {
+    next.selectedSkills = assertSelectedSkills(patch.selectedSkills)
+  }
+  if (patch.skillRoot !== undefined) {
+    next.skillRoot = assertSkillRoot(patch.skillRoot)
   }
   if (patch.localOnlyKeys !== undefined) {
     next.localOnlyKeys = assertLocalOnlyMap(patch.localOnlyKeys)

@@ -1,6 +1,7 @@
 import { isAbsolute, relative, resolve } from 'node:path'
 import { SyncError } from './errors.js'
 import type { ItemClass } from './protocol.js'
+import { SKILL_NAME_RE } from './skills.js'
 import { isPlainObject } from './util.js'
 
 export interface FileSpec {
@@ -59,15 +60,35 @@ export function settingsItemId(ns: string): string {
   return `settings:${ns}`
 }
 
-export function parseItemId(id: string): { kind: 'settings'; ns: string } | { kind: 'file'; spec: FileSpec } | undefined {
+export function parseItemId(id: string): { kind: 'settings'; ns: string } | { kind: 'file'; spec: FileSpec } | { kind: 'skill'; name: string } | undefined {
   if (id.startsWith('settings:')) {
     const ns = id.slice('settings:'.length)
     if (!NAMESPACE_RE.test(ns)) return undefined
     return { kind: 'settings', ns }
   }
+  if (id.startsWith('skill:')) {
+    const name = id.slice('skill:'.length)
+    if (!SKILL_NAME_RE.test(name)) return undefined
+    return { kind: 'skill', name }
+  }
   const spec = BY_ID.get(id)
   if (spec !== undefined) return { kind: 'file', spec }
   return undefined
+}
+
+export function assertSelectedSkills(input: unknown): string[] {
+  if (!Array.isArray(input)) throw new SyncError('validation', 'selectedSkills must be an array')
+  return [...new Set(input.map(name => {
+    if (typeof name !== 'string' || !SKILL_NAME_RE.test(name)) {
+      throw new SyncError('validation', `invalid skill id: ${String(name)}`)
+    }
+    return name
+  }))]
+}
+
+export function assertSkillRoot(input: unknown): 'dsh' | 'agents' {
+  if (input !== 'dsh' && input !== 'agents') throw new SyncError('validation', 'skillRoot must be "dsh" or "agents"')
+  return input
 }
 
 export function assertNamespace(ns: unknown): string {

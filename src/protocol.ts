@@ -13,7 +13,7 @@ export const DEVICES_DIR = 'devices'
 export const META_FILE = 'meta.json'
 
 export const MAX_BODY_BYTES = 256 * 1024
-export const MAX_DEVICE_FILE_BYTES = 2 * 1024 * 1024
+export const MAX_DEVICE_FILE_BYTES = 16 * 1024 * 1024
 export const MAX_ITEM_TEXT_BYTES = 256 * 1024
 export const MAX_DEVICES = 64
 export const PLAN_TTL_MS = 10 * 60 * 1000
@@ -21,7 +21,7 @@ export const PLAN_TTL_MS = 10 * 60 * 1000
 /** How a synced item may affect the running Host. */
 export type ItemClass = 'safe-live' | 'restart' | 'executable'
 
-export type ItemKind = 'settings' | 'file'
+export type ItemKind = 'settings' | 'file' | 'skill'
 
 export type ItemRelation = 'local-only' | 'remote-only' | 'converged' | 'conflict' | 'mergeable'
 
@@ -68,6 +68,7 @@ export interface SyncPlan {
 export interface StatusCounts {
   selectedNamespaces: number
   selectedFiles: number
+  selectedSkills: number
   localItems: number
   remoteItems: number
   remoteDevices: number
@@ -125,6 +126,9 @@ export interface PersistedConfig {
   syncDir: string
   selectedNamespaces: string[]
   selectedFiles: string[]
+  selectedSkills: string[]
+  /** Where synced skills are read from and written to. */
+  skillRoot: 'dsh' | 'agents'
   /** Namespace → dotted key prefixes that never leave this machine. */
   localOnlyKeys: Record<string, string[]>
   intervalMinutes: number
@@ -138,6 +142,41 @@ export interface SnapshotItem {
   hash: string
   value: unknown
   updatedAt: number
+}
+
+/** One file inside a skill directory. */
+export interface SkillFile {
+  encoding: 'utf8' | 'base64'
+  hash: string
+  data: string
+}
+
+/** A skill directory snapshot; the item is atomic. */
+export interface SkillValue {
+  name: string
+  files: Record<string, SkillFile>
+  source?: {
+    adapter: string
+    path?: string
+    hash?: string
+  }
+}
+
+export interface ImportedSkill {
+  name: string
+  description?: string
+  path: string
+  files: number
+  bytes: number
+  hash?: string
+  compatible: boolean
+  issues: string[]
+}
+
+export interface SkillScan {
+  root: string
+  found: ImportedSkill[]
+  warnings: string[]
 }
 
 export interface DeviceFile {

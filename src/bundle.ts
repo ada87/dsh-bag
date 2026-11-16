@@ -16,7 +16,7 @@ export const PAYLOAD_FORMAT = 'dsh-bag-payload'
 export const PAYLOAD_VERSION = 1
 export const KDF_ITERATIONS = 600_000
 export const MIN_PASSWORD_LENGTH = 8
-export const MAX_ENVELOPE_BYTES = 8 * 1024 * 1024
+export const MAX_ENVELOPE_BYTES = 24 * 1024 * 1024
 
 const SALT_BYTES = 16
 const NONCE_BYTES = 12
