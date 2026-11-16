@@ -1,4 +1,4 @@
-import { copyFile, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { copyFile, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { FolderBackend, writeAtomic, type RemoteItem, type RemoteSnapshot } from './backend.js'
 import {
@@ -46,11 +46,15 @@ import { assertClean, scanText, type Finding } from './secret-scan.js'
 import { hasVolatile, projectVolatile } from './settings.js'
 import { importClaudeSkills, scanClaudeSkills } from './import/claude.js'
 import {
+  assertDirValue,
   assertSkillValue,
   copyDirSafe,
+  dirHash,
+  readDirSnapshot,
   readSkillDir,
   resolveSkillsRoot,
   skillHash,
+  writeDirSnapshot,
   writeSkillDir,
 } from './skills.js'
 import {
@@ -244,6 +248,31 @@ export class SyncEngine {
     return { ...result, target }
   }
 
+  /** User agent presets present on this machine. */
+  async listPresets(): Promise<Array<{ id: string; name?: string }>> {
+    const root = join(this.home, '.agent-presets')
+    let entries
+    try {
+      entries = await readdir(root, { withFileTypes: true })
+    } catch {
+      return []
+    }
+    const out: Array<{ id: string; name?: string }> = []
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.isSymbolicLink()) continue
+      const composition = await stat(join(root, entry.name, 'agent.cordis.yml')).catch(() => undefined)
+      if (composition === undefined || !composition.isFile()) continue
+      let name: string | undefined
+      const meta = await readFile(join(root, entry.name, 'preset.yml'), 'utf8').catch(() => undefined)
+      if (meta !== undefined) {
+        const match = /^name:\s*(.+)$/m.exec(meta)
+        if (match?.[1] !== undefined) name = match[1].trim().replace(/^["']|["']$/g, '')
+      }
+      out.push({ id: entry.name, ...(name === undefined ? {} : { name }) })
+    }
+    return out.sort((a, b) => a.id.localeCompare(b.id))
+  }
+
   async plan(): Promise<SyncPlan> {
     const config = await this.requireConfigured()
     const capture = await this.capture(config)
@@ -324,7 +353,13 @@ export class SyncEngine {
       const kind: ItemKind = local?.kind ?? parsed.kind
       const cls: ItemClass = local?.cls ?? rem?.cls ?? (kind === 'skill' ? 'executable' : 'safe-live')
       const label = local?.label
-        ?? (parsed.kind === 'file' ? parsed.spec.label : parsed.kind === 'settings' ? parsed.ns : parsed.name)
+        ?? (parsed.kind === 'file'
+          ? parsed.spec.label
+          : parsed.kind === 'settings'
+            ? parsed.ns
+            : parsed.kind === 'skill'
+              ? parsed.name
+              : parsed.kind === 'preset' ? parsed.id : 'hooks')
 
       let relation: ItemRelation = classify(local?.hash, rem?.hash, base?.hash)
       if (rem !== undefined && local !== undefined && state.rejected[id] === rem.hash) {
@@ -349,7 +384,7 @@ export class SyncEngine {
           else if (!deepEqual(merged, local.value)) relation = 'mergeable'
           else relation = 'local-only'
         }
-      } else if ((kind === 'file' || kind === 'skill') && relation === 'conflict') {
+      } else if ((kind === 'file' || kind === 'skill' || kind === 'preset' || kind === 'hooks') && relation === 'conflict') {
         conflicts = [{ path: [] }]
         merged = local?.value
       }
@@ -367,7 +402,7 @@ export class SyncEngine {
         const before = typeof local?.value === 'string' ? local.value : ''
         const after = typeof merged === 'string' ? merged : ''
         preview = lineDiff(before, after).slice(0, 8000)
-      } else if (writes && kind === 'skill') {
+      } else if (writes && (kind === 'skill' || kind === 'preset' || kind === 'hooks')) {
         preview = skillPreview(local?.value, merged)
       }
 
@@ -486,6 +521,27 @@ export class SyncEngine {
         })
         continue
       }
+      if (parsed.kind === 'preset' || parsed.kind === 'hooks') {
+        let value: SkillValue
+        try {
+          value = parsed.kind === 'preset' ? assertDirValue(entry.value, isPresetComposition) : assertDirValue(entry.value)
+        } catch (error) {
+          warnings.push(`${parsed.kind} ignored: ${messageOf(error)}`)
+          continue
+        }
+        for (const [rel, file] of Object.entries(value.files)) {
+          if (file.encoding === 'utf8') assertClean(scanText(`${parsed.kind}:${value.name}:${rel}`, file.data))
+        }
+        items.set(id, {
+          id,
+          hash: dirHash(value),
+          cls: 'executable',
+          value,
+          updatedAt,
+          device: 'bundle',
+        })
+        continue
+      }
       if (typeof entry.value !== 'string') {
         warnings.push(`file ignored (not text): ${parsed.spec.rel}`)
         continue
@@ -516,17 +572,23 @@ export class SyncEngine {
     const namespaces = new Set(config.selectedNamespaces)
     const files = new Set(config.selectedFiles)
     const skills = new Set(config.selectedSkills)
+    const presets = new Set(config.selectedPresets)
+    let hooks = config.syncHooks
     const remote = await entry.readRemote()
     for (const id of remote.items.keys()) {
       const parsed = parseItemId(id)
       if (parsed === undefined) continue
       if (parsed.kind === 'settings') namespaces.add(parsed.ns)
       else if (parsed.kind === 'skill') skills.add(parsed.name)
+      else if (parsed.kind === 'preset') presets.add(parsed.id)
+      else if (parsed.kind === 'hooks') hooks = true
       else files.add(id)
     }
     if (namespaces.size === config.selectedNamespaces.length
       && files.size === config.selectedFiles.length
-      && skills.size === config.selectedSkills.length) {
+      && skills.size === config.selectedSkills.length
+      && presets.size === config.selectedPresets.length
+      && hooks === config.syncHooks) {
       return config
     }
     const next: PersistedConfig = {
@@ -534,6 +596,8 @@ export class SyncEngine {
       selectedNamespaces: [...namespaces],
       selectedFiles: [...files],
       selectedSkills: [...skills],
+      selectedPresets: [...presets],
+      syncHooks: hooks,
     }
     await saveConfig(this.paths, next)
     return next
@@ -585,7 +649,7 @@ export class SyncEngine {
     const rejectedNext = { ...stateBefore.rejected }
 
     const fileWrites: Array<{ id: string; specRel: string; text: string }> = []
-    const dirWrites: Array<{ id: string; name: string; value: SkillValue }> = []
+    const dirWrites: Array<{ id: string; kind: 'skill' | 'preset' | 'hooks'; name: string; value: SkillValue }> = []
     const settingsWrites: Array<{
       id: string
       ns: string
@@ -654,12 +718,14 @@ export class SyncEngine {
         fileWrites.push({ id: item.id, specRel: parsed.spec.rel, text })
         if (item.cls === 'restart') restartRequired.push(item.id)
         if (item.id === 'file:profiles/web/package.json') installRequired.push(item.id)
-      } else if (target.kind === 'skill') {
-        const value = assertSkillValue(finalValue)
+      } else if (target.kind === 'skill' || target.kind === 'preset' || target.kind === 'hooks') {
+        const value = target.kind === 'skill'
+          ? assertSkillValue(finalValue)
+          : target.kind === 'preset' ? assertDirValue(finalValue, isPresetComposition) : assertDirValue(finalValue)
         for (const [rel, file] of Object.entries(value.files)) {
-          if (file.encoding === 'utf8') assertClean(scanText(`skill:${value.name}:${rel}`, file.data))
+          if (file.encoding === 'utf8') assertClean(scanText(`${target.kind}:${value.name}:${rel}`, file.data))
         }
-        dirWrites.push({ id: item.id, name: value.name, value })
+        dirWrites.push({ id: item.id, kind: target.kind, name: value.name, value })
       } else {
         const parsed = parseItemId(item.id)
         if (parsed?.kind !== 'settings') continue
@@ -731,10 +797,11 @@ export class SyncEngine {
       })
     }
     if (dirWrites.length > 0) {
-      const root = resolveSkillsRoot(this.home, config.skillRoot)
       for (const write of dirWrites) {
+        const root = this.dirRoot(config, write.kind)
         const livePath = join(root, write.name)
-        const backupPath = join(this.paths.backups, operationId, 'skills', write.name)
+        const bucket = write.kind === 'skill' ? 'skills' : write.kind === 'preset' ? 'presets' : 'hooks'
+        const backupPath = join(this.paths.backups, operationId, bucket, write.name)
         const info = await stat(livePath).catch(() => undefined)
         const existed = info !== undefined && info.isDirectory()
         if (existed) await copyDirSafe(livePath, backupPath)
@@ -753,9 +820,9 @@ export class SyncEngine {
         applied.push(write.id)
       }
       if (dirWrites.length > 0) {
-        const root = resolveSkillsRoot(this.home, config.skillRoot)
         for (const write of dirWrites) {
-          await writeSkillDir(root, write.value)
+          const root = this.dirRoot(config, write.kind)
+          await writeDirSnapshot(root, write.value)
           applied.push(write.id)
         }
       }
@@ -949,6 +1016,12 @@ export class SyncEngine {
 
   // ---------------------------------------------------------------- internals
 
+  private dirRoot(config: PersistedConfig, kind: 'skill' | 'preset' | 'hooks'): string {
+    if (kind === 'skill') return resolveSkillsRoot(this.home, config.skillRoot)
+    if (kind === 'preset') return join(this.home, '.agent-presets')
+    return this.home
+  }
+
   private async capture(config: PersistedConfig, only?: Set<string>): Promise<Capture> {
     const items = new Map<string, CapturedItem>()
     const warnings: string[] = []
@@ -1064,6 +1137,62 @@ export class SyncEngine {
       }
     }
 
+    const presetIds = only === undefined
+      ? config.selectedPresets
+      : [...only].flatMap(id => {
+        const parsed = parseItemId(id)
+        return parsed?.kind === 'preset' ? [parsed.id] : []
+      })
+    if (presetIds.length > 0) {
+      const root = join(this.home, '.agent-presets')
+      for (const id of presetIds) {
+        try {
+          const value = await readDirSnapshot(root, id, isPresetComposition)
+          if (value === undefined) {
+            warnings.push(`preset "${id}" is not present in ${root}`)
+            continue
+          }
+          for (const [rel, file] of Object.entries(value.files)) {
+            if (file.encoding === 'utf8') findings.push(...scanText(`preset:${id}:${rel}`, file.data))
+          }
+          items.set(`preset:${id}`, {
+            id: `preset:${id}`,
+            kind: 'preset',
+            cls: 'executable',
+            hash: dirHash(value),
+            value,
+            label: id,
+          })
+        } catch (error) {
+          warnings.push(`could not read preset ${id}: ${messageOf(error)}`)
+        }
+      }
+    }
+
+    const wantsHooks = only === undefined ? config.syncHooks : only.has('hooks')
+    if (wantsHooks) {
+      try {
+        const value = await readDirSnapshot(this.home, 'hooks')
+        if (value === undefined) {
+          warnings.push('hooks directory is not present')
+        } else {
+          for (const [rel, file] of Object.entries(value.files)) {
+            if (file.encoding === 'utf8') findings.push(...scanText(`hooks:${rel}`, file.data))
+          }
+          items.set('hooks', {
+            id: 'hooks',
+            kind: 'hooks',
+            cls: 'executable',
+            hash: dirHash(value),
+            value,
+            label: 'hooks',
+          })
+        }
+      } catch (error) {
+        warnings.push(`could not read hooks: ${messageOf(error)}`)
+      }
+    }
+
     return { items, warnings, findings, revisions, schemas }
   }
 
@@ -1080,7 +1209,7 @@ export class SyncEngine {
     config: PersistedConfig,
     files: Array<{ id: string; specRel: string; text: string }>,
     settingsWrites: Array<{ id: string; ns: string; expected: unknown }>,
-    dirs: Array<{ id: string; name: string; value: SkillValue }>,
+    dirs: Array<{ id: string; kind: 'skill' | 'preset' | 'hooks'; name: string; value: SkillValue }>,
   ): Promise<void> {
     for (const write of files) {
       const text = normalizeText(await readFile(join(this.home, write.specRel), 'utf8'))
@@ -1089,11 +1218,15 @@ export class SyncEngine {
       }
     }
     if (dirs.length > 0) {
-      const root = resolveSkillsRoot(this.home, config.skillRoot)
       for (const write of dirs) {
-        const current = await readSkillDir(root, write.name)
-        if (current === undefined || skillHash(current) !== skillHash(write.value)) {
-          throw new SyncError('verify', `skill verification failed for ${write.name}`)
+        const root = this.dirRoot(config, write.kind)
+        const current = await readDirSnapshot(
+          root,
+          write.name,
+          write.kind === 'skill' ? undefined : write.kind === 'preset' ? isPresetComposition : undefined,
+        )
+        if (current === undefined || dirHash(current) !== dirHash(write.value)) {
+          throw new SyncError('verify', `${write.kind} verification failed for ${write.name}`)
         }
       }
     }
@@ -1180,6 +1313,8 @@ function pruneBase<T>(base: Record<string, T>, config: PersistedConfig): Record<
     ...config.selectedNamespaces.map(settingsItemId),
     ...config.selectedFiles,
     ...config.selectedSkills.map(name => `skill:${name}`),
+    ...config.selectedPresets.map(id => `preset:${id}`),
+    ...(config.syncHooks ? ['hooks'] : []),
   ])
   const out: Record<string, T> = {}
   for (const [id, value] of Object.entries(base)) if (keep.has(id)) out[id] = value
@@ -1191,6 +1326,8 @@ function pruneRejected(rejected: Record<string, string>, config: PersistedConfig
     ...config.selectedNamespaces.map(settingsItemId),
     ...config.selectedFiles,
     ...config.selectedSkills.map(name => `skill:${name}`),
+    ...config.selectedPresets.map(id => `preset:${id}`),
+    ...(config.syncHooks ? ['hooks'] : []),
   ])
   const out: Record<string, string> = {}
   for (const [id, value] of Object.entries(rejected)) if (keep.has(id)) out[id] = value
@@ -1223,7 +1360,7 @@ function remoteValue(remote: RemoteSnapshot, id: string): unknown {
 }
 
 function hashItemValue(kind: ItemKind, value: unknown): string {
-  if (kind === 'skill') return skillHash(assertSkillValue(value))
+  if (kind === 'skill' || kind === 'preset' || kind === 'hooks') return dirHash(assertDirValue(value))
   if (kind === 'file') return sha256(normalizeText(String(value ?? '')))
   return sha256(canonicalJson(value))
 }
@@ -1234,6 +1371,10 @@ function asSkill(value: unknown): SkillValue | undefined {
   if (typeof candidate.name !== 'string') return undefined
   if (candidate.files === null || typeof candidate.files !== 'object' || Array.isArray(candidate.files)) return undefined
   return candidate as SkillValue
+}
+
+function isPresetComposition(_name: string, files: Record<string, unknown>): boolean {
+  return Object.hasOwn(files, 'agent.cordis.yml')
 }
 
 function skillPreview(before: unknown, after: unknown): string {

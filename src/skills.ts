@@ -2,7 +2,7 @@ import { cp, mkdir, readFile, readdir, rm, stat, lstat, writeFile } from 'node:f
 import { homedir } from 'node:os'
 import { dirname, join, posix } from 'node:path'
 import { SyncError } from './errors.js'
-import type { SkillFile, SkillValue } from './protocol.js'
+import type { DirValue, SkillFile } from './protocol.js'
 import { canonicalJson, sha256 } from './util.js'
 
 export const SKILL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
@@ -32,8 +32,17 @@ export function resolveSkillsRoot(home: string, mode: 'dsh' | 'agents'): string 
 }
 
 /** Read one skill directory as an atomic snapshot. */
-export async function readSkillDir(root: string, name: string): Promise<SkillValue | undefined> {
-  if (!SKILL_NAME_RE.test(name)) throw new SyncError('validation', `invalid skill name: ${name}`)
+export async function readSkillDir(root: string, name: string): Promise<DirValue | undefined> {
+  return readDirSnapshot(root, name, isSkillInstruction)
+}
+
+/** Read any capability directory as an atomic snapshot. */
+export async function readDirSnapshot(
+  root: string,
+  name: string,
+  requireFile?: (name: string, files: Record<string, SkillFile>) => boolean,
+): Promise<DirValue | undefined> {
+  if (!SKILL_NAME_RE.test(name)) throw new SyncError('validation', `invalid directory name: ${name}`)
   const dir = join(root, name)
   let info
   try {
@@ -48,72 +57,83 @@ export async function readSkillDir(root: string, name: string): Promise<SkillVal
   let bytes = 0
   await walk(dir, '', async (rel, absolute) => {
     count += 1
-    if (count > MAX_SKILL_FILES) throw new SyncError('skill', `skill ${name} has more than ${MAX_SKILL_FILES} files`)
+    if (count > MAX_SKILL_FILES) throw new SyncError('dir', `${name} has more than ${MAX_SKILL_FILES} files`)
     const buffer = await readFile(absolute)
     bytes += buffer.byteLength
     if (buffer.byteLength > MAX_SKILL_FILE_BYTES) {
-      throw new SyncError('skill', `${rel} in skill ${name} is larger than ${MAX_SKILL_FILE_BYTES} bytes`)
+      throw new SyncError('dir', `${rel} in ${name} is larger than ${MAX_SKILL_FILE_BYTES} bytes`)
     }
-    if (bytes > MAX_SKILL_BYTES) throw new SyncError('skill', `skill ${name} is larger than ${MAX_SKILL_BYTES} bytes`)
+    if (bytes > MAX_SKILL_BYTES) throw new SyncError('dir', `${name} is larger than ${MAX_SKILL_BYTES} bytes`)
     const text = decodeText(buffer)
     files[rel] = text === undefined
       ? { encoding: 'base64', hash: sha256(buffer.toString('base64')), data: buffer.toString('base64') }
       : { encoding: 'utf8', hash: sha256(buffer.toString('utf8')), data: text }
   })
-  if (!hasInstructionFile(name, files)) return undefined
+  if (requireFile !== undefined && !requireFile(name, files)) return undefined
   return { name, files }
 }
 
-export function skillHash(value: SkillValue): string {
+export function dirHash(value: DirValue): string {
   const list = Object.entries(value.files)
     .map(([rel, file]) => [rel, file.hash])
     .sort(([a], [b]) => String(a).localeCompare(String(b)))
   return sha256(canonicalJson([value.name, list]))
 }
 
-export function skillBytes(value: SkillValue): number {
+export function skillHash(value: DirValue): string {
+  return dirHash(value)
+}
+
+export function skillBytes(value: DirValue): number {
   let total = 0
   for (const file of Object.values(value.files)) total += Buffer.byteLength(file.data)
   return total
 }
 
-export function assertSkillValue(value: unknown): SkillValue {
+export function assertDirValue(
+  value: unknown,
+  requireFile?: (name: string, files: Record<string, SkillFile>) => boolean,
+): DirValue {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    throw new SyncError('skill', 'a skill snapshot must be an object')
+    throw new SyncError('dir', 'a directory snapshot must be an object')
   }
-  const candidate = value as Partial<SkillValue>
+  const candidate = value as Partial<DirValue>
   if (typeof candidate.name !== 'string' || !SKILL_NAME_RE.test(candidate.name)) {
-    throw new SyncError('skill', 'a skill snapshot has an invalid name')
+    throw new SyncError('dir', 'a directory snapshot has an invalid name')
   }
   if (candidate.files === null || typeof candidate.files !== 'object' || Array.isArray(candidate.files)) {
-    throw new SyncError('skill', 'a skill snapshot has no files')
+    throw new SyncError('dir', 'a directory snapshot has no files')
   }
   const files: Record<string, SkillFile> = {}
   let total = 0
   for (const [rel, raw] of Object.entries(candidate.files)) {
     assertRelPath(rel)
-    if (raw === null || typeof raw !== 'object') throw new SyncError('skill', `skill file ${rel} is malformed`)
+    if (raw === null || typeof raw !== 'object') throw new SyncError('dir', `file ${rel} is malformed`)
     const file = raw as Partial<SkillFile>
-    if (file.encoding !== 'utf8' && file.encoding !== 'base64') throw new SyncError('skill', `skill file ${rel} has no encoding`)
-    if (typeof file.data !== 'string') throw new SyncError('skill', `skill file ${rel} has no data`)
+    if (file.encoding !== 'utf8' && file.encoding !== 'base64') throw new SyncError('dir', `file ${rel} has no encoding`)
+    if (typeof file.data !== 'string') throw new SyncError('dir', `file ${rel} has no data`)
     const buffer = file.encoding === 'base64' ? Buffer.from(file.data, 'base64') : Buffer.from(file.data, 'utf8')
-    if (buffer.byteLength > MAX_SKILL_FILE_BYTES) throw new SyncError('skill', `skill file ${rel} is too large`)
+    if (buffer.byteLength > MAX_SKILL_FILE_BYTES) throw new SyncError('dir', `file ${rel} is too large`)
     total += buffer.byteLength
-    if (total > MAX_SKILL_BYTES) throw new SyncError('skill', `skill ${candidate.name} is too large`)
+    if (total > MAX_SKILL_BYTES) throw new SyncError('dir', `${candidate.name} is too large`)
     files[rel] = {
       encoding: file.encoding,
       data: file.data,
       hash: typeof file.hash === 'string' && file.hash.length === 64 ? file.hash : sha256(buffer.toString(file.encoding === 'base64' ? 'base64' : 'utf8')),
     }
   }
-  if (!hasInstructionFile(candidate.name, files)) {
-    throw new SyncError('skill', `skill ${candidate.name} has no SKILL.md`)
+  if (requireFile !== undefined && !requireFile(candidate.name, files)) {
+    throw new SyncError('dir', `${candidate.name} is missing its required file`)
   }
   return { name: candidate.name, files }
 }
 
-/** Replace one skill directory with the snapshot. */
-export async function writeSkillDir(root: string, value: SkillValue): Promise<void> {
+export function assertSkillValue(value: unknown): DirValue {
+  return assertDirValue(value, isSkillInstruction)
+}
+
+/** Replace one directory with the snapshot. */
+export async function writeDirSnapshot(root: string, value: DirValue): Promise<void> {
   const target = join(root, value.name)
   await rm(target, { recursive: true, force: true })
   for (const [rel, file] of Object.entries(value.files)) {
@@ -122,6 +142,10 @@ export async function writeSkillDir(root: string, value: SkillValue): Promise<vo
     await mkdir(dirname(path), { recursive: true })
     await writeFile(path, file.encoding === 'base64' ? Buffer.from(file.data, 'base64') : file.data, 'utf8')
   }
+}
+
+export async function writeSkillDir(root: string, value: DirValue): Promise<void> {
+  await writeDirSnapshot(root, value)
 }
 
 /** Copy a directory tree without following symlinks. */
@@ -169,7 +193,7 @@ async function walk(
   }
 }
 
-function hasInstructionFile(name: string, files: Record<string, SkillFile>): boolean {
+function isSkillInstruction(name: string, files: Record<string, SkillFile>): boolean {
   return Object.hasOwn(files, 'SKILL.md') || Object.hasOwn(files, `${name}.md`)
 }
 

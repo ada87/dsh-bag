@@ -195,6 +195,7 @@ async function readDeviceFile(path: string): Promise<DeviceFile | undefined> {
 
 function isValidId(id: string): boolean {
   return id.startsWith('settings:') || id.startsWith('file:') || id.startsWith('skill:')
+    || id.startsWith('preset:') || id === 'hooks'
 }
 
 /** Write a sibling temp file then rename, retrying Windows transient locks. */

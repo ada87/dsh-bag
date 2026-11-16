@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { mkdir, readFile } from 'node:fs/promises'
 import { writeAtomic } from './backend.js'
 import { SyncError } from './errors.js'
-import { assertLocalOnlyMap, assertSelectedFiles, assertSelectedNamespaces, assertSelectedSkills, assertSkillRoot, assertSyncDir } from './policy.js'
+import { assertLocalOnlyMap, assertSelectedFiles, assertSelectedNamespaces, assertSelectedPresets, assertSelectedSkills, assertSkillRoot, assertSyncHooks, assertSyncDir } from './policy.js'
 import { CONFIG_FILE, JOURNAL_FILE, SCHEMA_VERSION, STATE_DIR_NAME, STATE_FILE, type PersistedConfig, type PersistedState } from './protocol.js'
 import { isPlainObject, randomId } from './util.js'
 
@@ -39,6 +39,8 @@ export function defaultConfig(): PersistedConfig {
     selectedNamespaces: [],
     selectedFiles: [],
     selectedSkills: [],
+    selectedPresets: [],
+    syncHooks: false,
     skillRoot: 'dsh',
     localOnlyKeys: {},
     intervalMinutes: 0,
@@ -65,6 +67,8 @@ export async function loadConfig(paths: Paths): Promise<PersistedConfig> {
     selectedNamespaces: Array.isArray(raw.selectedNamespaces) ? raw.selectedNamespaces.filter((ns): ns is string => typeof ns === 'string') : [],
     selectedFiles: Array.isArray(raw.selectedFiles) ? raw.selectedFiles.filter((id): id is string => typeof id === 'string') : [],
     selectedSkills: Array.isArray(raw.selectedSkills) ? raw.selectedSkills.filter((name): name is string => typeof name === 'string') : [],
+    selectedPresets: Array.isArray(raw.selectedPresets) ? raw.selectedPresets.filter((id): id is string => typeof id === 'string') : [],
+    syncHooks: raw.syncHooks === true,
     skillRoot: raw.skillRoot === 'agents' ? 'agents' : 'dsh',
     localOnlyKeys: isPlainObject(raw.localOnlyKeys) ? (raw.localOnlyKeys as Record<string, string[]>) : {},
     intervalMinutes: typeof raw.intervalMinutes === 'number' && raw.intervalMinutes >= 0 ? Math.floor(raw.intervalMinutes) : 0,
@@ -96,6 +100,12 @@ export function normalizeConfigPatch(
   }
   if (patch.selectedSkills !== undefined) {
     next.selectedSkills = assertSelectedSkills(patch.selectedSkills)
+  }
+  if (patch.selectedPresets !== undefined) {
+    next.selectedPresets = assertSelectedPresets(patch.selectedPresets)
+  }
+  if (patch.syncHooks !== undefined) {
+    next.syncHooks = assertSyncHooks(patch.syncHooks)
   }
   if (patch.skillRoot !== undefined) {
     next.skillRoot = assertSkillRoot(patch.skillRoot)

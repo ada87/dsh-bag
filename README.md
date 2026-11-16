@@ -10,8 +10,8 @@ Three layers:
 
 ```
 Import            Pack                    Deliver
-Claude Code  →    skills / settings  →    folder / Git / .dshbag
-skills            presets / hooks          Door Cloud (later)
+Claude Code  →    skills / presets   →    folder / Git / .dshbag
+skills            hooks / AGENTS.md        Door Cloud (later)
 ```
 
 ## Install
@@ -41,7 +41,7 @@ Imported skills are added to the capability pack automatically.
 ### Sync the pack
 
 1. Enter an absolute **sync folder** outside the dsh home, for example `D:\sync\dsh-bag` or `~/Sync/dsh-bag`.
-2. Tick the settings namespaces, profile files and skills you want to travel.
+2. Tick the settings namespaces, profile files, user presets and skills you want to travel; enable hooks if needed.
 3. **Save**.
 4. On the source machine press **Publish this machine**.
 5. On another machine press **Compare**, review, then **Apply**.
@@ -62,12 +62,15 @@ The file holds only skills, settings and profile files; credentials are never ca
 | Item | Default | Notes |
 |---|---|---|
 | **Skills** (`~/.dsh/skills/<name>/`) | off | Atomic directory snapshots; text and base64 files; executable confirmation. |
+| **User presets** (`~/.dsh/.agent-presets/<id>/`) | off | Atomic directory snapshots; shipped presets are never touched. |
+| **Hooks** (`~/.dsh/hooks/`) | off | Executable; always requires confirmation. |
 | Selected settings namespaces | off | Only fields beneath a schema-declared `volatile` node travel — the ones dsh accepts as live writes. Secret-declared fields are redacted before capture and never uploaded. |
 | `profiles/web/package.json` | off | Plugin list; needs a restart. |
 | `profiles/web/cordis.patch.yml` | off | Executable; requires explicit confirmation. |
 | `profiles/headless/package.json` | off | Same as the web profile. |
 | `profiles/headless/cordis.patch.yml` | off | Executable. |
 | `cordis.patch.yml` (home patch) | off | Executable. |
+| `AGENTS.md` | off | Global instructions; treated as executable because it changes behavior. |
 
 Never touched: credentials, sessions, storages, `node_modules`, `.env*`, `cordis.yml`, generated profile files, or anything not enumerated above.
 
@@ -115,7 +118,7 @@ They are stripped before capture and are never overwritten by a peer.
 
 ## v1 limitations
 
-- **Import is Claude Code skills only.** MCP servers, user presets, hooks and flat `<name>.md` skills are deferred.
+- **Import is Claude Code skills only.** MCP servers, hooks and flat `<name>.md` skills are deferred; user presets are synced but not imported.
 - **Folder backend only.** Git and WebDAV backends are intentionally deferred; the engine is written behind a small backend seam.
 - **Whole-skill deletion is not propagated.** File-level changes inside a skill merge; removing a selected skill from every machine is manual.
 - **One backup file, no history.** A `.dshbag` is a snapshot; exporting again does not keep older bundles.
@@ -136,6 +139,7 @@ All routes except `/dsh-bag/health` require a trusted request.
 | PUT | `/dsh-bag/api/config` | Patch `syncDir`, selections, local-only keys, device name |
 | GET | `/dsh-bag/api/namespaces` | Settings namespaces in this profile |
 | GET | `/dsh-bag/api/files` | Enumerated profile files |
+| GET | `/dsh-bag/api/presets` | User presets present under `~/.dsh/.agent-presets` |
 | GET | `/dsh-bag/api/import/scan` | Read-only Claude Code skill scan |
 | POST | `/dsh-bag/api/import/skills` | Import selected skills into the configured root |
 | POST | `/dsh-bag/api/plan` | Compare and return a plan |

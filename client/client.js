@@ -54,6 +54,11 @@ window.__ModuleLoader__.load({
       needsReview: '需审查',
       importedSummary: '已导入 {count} 个 skill',
       scanRoot: '扫描位置',
+      presetsTitle: '用户 Presets',
+      presetsHint: '只同步 ~/.dsh/.agent-presets 下的用户 preset 目录；系统 preset 不碰。',
+      noPresets: '这个 profile 里没有用户 preset',
+      hooksTitle: 'Hooks',
+      hooksHint: '同步 ~/.dsh/hooks 目录。Hooks 能执行代码，应用时必须确认；跨 agent 的 hooks 建议用 dsh 的桥插件。',
       compare: '比较',
       apply: '应用',
       push: '发布本机',
@@ -133,6 +138,11 @@ window.__ModuleLoader__.load({
       needsReview: 'needs review',
       importedSummary: 'Imported {count} skill(s)',
       scanRoot: 'Scanning',
+      presetsTitle: 'User presets',
+      presetsHint: 'Only user preset directories under ~/.dsh/.agent-presets travel; shipped presets are untouched.',
+      noPresets: 'No user preset in this profile',
+      hooksTitle: 'Hooks',
+      hooksHint: 'Syncs ~/.dsh/hooks. Hooks can execute code and always require confirmation; prefer dsh bridge plugins for other agents.',
       compare: 'Compare',
       apply: 'Apply',
       push: 'Publish this machine',
@@ -291,6 +301,7 @@ window.__ModuleLoader__.load({
       const [draft, setDraft] = useState(null)
       const [namespaces, setNamespaces] = useState([])
       const [files, setFiles] = useState([])
+      const [presets, setPresets] = useState([])
       const [plan, setPlan] = useState(null)
       const [doctor, setDoctor] = useState(null)
       const [decisions, setDecisions] = useState({})
@@ -306,16 +317,18 @@ window.__ModuleLoader__.load({
       const [importPicks, setImportPicks] = useState({})
 
       const refresh = useCallback(async () => {
-        const [nextStatus, nextConfig, nextNamespaces, nextFiles] = await Promise.all([
+        const [nextStatus, nextConfig, nextNamespaces, nextFiles, nextPresets] = await Promise.all([
           request('/status'),
           request('/config'),
           request('/namespaces'),
           request('/files'),
+          request('/presets'),
         ])
         setStatus(nextStatus)
         setDraft({ ...nextConfig, localOnlyText: formatLocalOnly(nextConfig.localOnlyKeys) })
         setNamespaces(nextNamespaces.namespaces || [])
         setFiles(nextFiles.files || [])
+        setPresets(nextPresets.presets || [])
       }, [])
 
       useEffect(() => {
@@ -344,6 +357,8 @@ window.__ModuleLoader__.load({
               selectedNamespaces: draft.selectedNamespaces,
               selectedFiles: draft.selectedFiles,
               selectedSkills: draft.selectedSkills,
+              selectedPresets: draft.selectedPresets,
+              syncHooks: draft.syncHooks,
               skillRoot: draft.skillRoot,
               localOnlyKeys: parseLocalOnly(draft.localOnlyText),
               intervalMinutes: draft.intervalMinutes,
@@ -618,6 +633,31 @@ window.__ModuleLoader__.load({
                 disabled: busy !== '' || Object.values(importPicks).every(value => !value),
               }, t('importSelected'))))
           : null,
+
+        h('div', { className: 'dsh-bag-card' },
+          h('h3', null, t('presetsTitle')),
+          h('p', null, t('presetsHint')),
+          presets.length === 0
+            ? h('p', null, t('noPresets'))
+            : h('div', { className: 'dsh-bag-grid' },
+              presets.map(entry => h('label', { key: entry.id },
+                h('input', {
+                  type: 'checkbox',
+                  checked: (draft.selectedPresets || []).includes(entry.id),
+                  onChange: () => toggle('selectedPresets', entry.id),
+                }),
+                entry.name !== undefined ? `${entry.name} (${entry.id})` : entry.id)))),
+
+        h('div', { className: 'dsh-bag-card' },
+          h('h3', null, t('hooksTitle')),
+          h('p', null, t('hooksHint')),
+          h('label', null,
+            h('input', {
+              type: 'checkbox',
+              checked: draft.syncHooks === true,
+              onChange: () => setDraft({ ...draft, syncHooks: !draft.syncHooks }),
+            }),
+            '~/.dsh/hooks')),
 
         h('div', { className: 'dsh-bag-card' },
           h('h3', null, t('localOnly')),

@@ -56,6 +56,10 @@ export function createHandler(deps: RouteDeps): (req: HostRequest, res: HostResp
         sendJson(res, 200, { files: FILE_SPECS.map(spec => ({ id: spec.id, label: spec.label, cls: spec.cls })) })
         return
       }
+      if (method === 'GET' && route.length === 1 && route[0] === 'presets') {
+        sendJson(res, 200, { presets: await deps.engine.listPresets() })
+        return
+      }
       if (method === 'GET' && route.length === 2 && route[0] === 'import' && route[1] === 'scan') {
         sendJson(res, 200, await deps.engine.scanSkills())
         return

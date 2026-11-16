@@ -46,11 +46,18 @@ export const FILE_SPECS: readonly FileSpec[] = [
     cls: 'executable',
     label: 'Home patch',
   },
+  {
+    id: 'file:AGENTS.md',
+    rel: 'AGENTS.md',
+    cls: 'executable',
+    label: 'Global instructions',
+  },
 ]
 
 const BY_ID = new Map(FILE_SPECS.map(spec => [spec.id, spec]))
 
 export const NAMESPACE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
+export const PRESET_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/
 
 export function fileSpec(id: string): FileSpec | undefined {
   return BY_ID.get(id)
@@ -60,7 +67,7 @@ export function settingsItemId(ns: string): string {
   return `settings:${ns}`
 }
 
-export function parseItemId(id: string): { kind: 'settings'; ns: string } | { kind: 'file'; spec: FileSpec } | { kind: 'skill'; name: string } | undefined {
+export function parseItemId(id: string): { kind: 'settings'; ns: string } | { kind: 'file'; spec: FileSpec } | { kind: 'skill'; name: string } | { kind: 'preset'; id: string } | { kind: 'hooks' } | undefined {
   if (id.startsWith('settings:')) {
     const ns = id.slice('settings:'.length)
     if (!NAMESPACE_RE.test(ns)) return undefined
@@ -71,6 +78,12 @@ export function parseItemId(id: string): { kind: 'settings'; ns: string } | { ki
     if (!SKILL_NAME_RE.test(name)) return undefined
     return { kind: 'skill', name }
   }
+  if (id.startsWith('preset:')) {
+    const preset = id.slice('preset:'.length)
+    if (!PRESET_ID_RE.test(preset)) return undefined
+    return { kind: 'preset', id: preset }
+  }
+  if (id === 'hooks') return { kind: 'hooks' }
   const spec = BY_ID.get(id)
   if (spec !== undefined) return { kind: 'file', spec }
   return undefined
@@ -88,6 +101,21 @@ export function assertSelectedSkills(input: unknown): string[] {
 
 export function assertSkillRoot(input: unknown): 'dsh' | 'agents' {
   if (input !== 'dsh' && input !== 'agents') throw new SyncError('validation', 'skillRoot must be "dsh" or "agents"')
+  return input
+}
+
+export function assertSelectedPresets(input: unknown): string[] {
+  if (!Array.isArray(input)) throw new SyncError('validation', 'selectedPresets must be an array')
+  return [...new Set(input.map(id => {
+    if (typeof id !== 'string' || !PRESET_ID_RE.test(id)) {
+      throw new SyncError('validation', `invalid preset id: ${String(id)}`)
+    }
+    return id
+  }))]
+}
+
+export function assertSyncHooks(input: unknown): boolean {
+  if (typeof input !== 'boolean') throw new SyncError('validation', 'syncHooks must be a boolean')
   return input
 }
 

@@ -1,6 +1,6 @@
 {
   "name": "dsh-bag",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Portable config sync for DeepSeek Harness: selected settings namespaces and profile files travel through any synced folder.",
   "type": "module",
   "main": "lib/index.js",

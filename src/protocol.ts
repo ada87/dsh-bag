@@ -21,7 +21,7 @@ export const PLAN_TTL_MS = 10 * 60 * 1000
 /** How a synced item may affect the running Host. */
 export type ItemClass = 'safe-live' | 'restart' | 'executable'
 
-export type ItemKind = 'settings' | 'file' | 'skill'
+export type ItemKind = 'settings' | 'file' | 'skill' | 'preset' | 'hooks'
 
 export type ItemRelation = 'local-only' | 'remote-only' | 'converged' | 'conflict' | 'mergeable'
 
@@ -127,6 +127,8 @@ export interface PersistedConfig {
   selectedNamespaces: string[]
   selectedFiles: string[]
   selectedSkills: string[]
+  selectedPresets: string[]
+  syncHooks: boolean
   /** Where synced skills are read from and written to. */
   skillRoot: 'dsh' | 'agents'
   /** Namespace → dotted key prefixes that never leave this machine. */
@@ -151,8 +153,8 @@ export interface SkillFile {
   data: string
 }
 
-/** A skill directory snapshot; the item is atomic. */
-export interface SkillValue {
+/** A capability directory snapshot; the item is atomic. */
+export interface DirValue {
   name: string
   files: Record<string, SkillFile>
   source?: {
@@ -161,6 +163,8 @@ export interface SkillValue {
     hash?: string
   }
 }
+
+export type SkillValue = DirValue
 
 export interface ImportedSkill {
   name: string
