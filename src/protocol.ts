@@ -56,6 +56,7 @@ export interface PlanItem {
 export interface SyncPlan {
   id: string
   createdAt: number
+  source: 'folder' | 'bundle'
   syncDir: string
   items: PlanItem[]
   warnings: string[]

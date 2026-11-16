@@ -29,6 +29,20 @@ window.__ModuleLoader__.load({
       filesHint: '补丁文件属于可执行变更，应用前需要单独确认。',
       localOnly: '仅本机字段',
       localOnlyHint: '每行一个：命名空间: a.b, c.d。这些字段不会上传，也不会被远端覆盖。',
+      backupTitle: '加密备份文件',
+      backupDesc: '把当前勾选的内容打包成一个口令加密的 .dshbag，放到 U 盘、网盘或发给另一台机器。不包含凭据。',
+      exportPassword: '导出口令（至少 8 位）',
+      exportButton: '导出 .dshbag',
+      exportHint: '口令丢失无法恢复；文件里只有设置和配置文件。',
+      importFile: '选择 .dshbag',
+      importPassword: '导入口令',
+      importButton: '导入并比较',
+      importHint: '导入不会直接写入：先比较，再在下面确认应用。',
+      exported: '已导出',
+      importReady: '已解密，请检查下面的比较结果',
+      planSource: '来源',
+      sourceFolder: '同步文件夹',
+      sourceBundle: '备份文件',
       compare: '比较',
       apply: '应用',
       push: '发布本机',
@@ -83,6 +97,20 @@ window.__ModuleLoader__.load({
       filesHint: 'Patch files are executable changes and need an explicit confirmation before they are applied.',
       localOnly: 'Local-only fields',
       localOnlyHint: 'One per line: namespace: a.b, c.d. These never upload and are never overwritten by a peer.',
+      backupTitle: 'Encrypted backup file',
+      backupDesc: 'Pack the current selection into one password-encrypted .dshbag for a USB stick, cloud drive or another machine. Credentials are never included.',
+      exportPassword: 'Export password (8+ characters)',
+      exportButton: 'Export .dshbag',
+      exportHint: 'A lost password cannot be recovered; the file only holds settings and profile files.',
+      importFile: 'Choose a .dshbag',
+      importPassword: 'Import password',
+      importButton: 'Import and compare',
+      importHint: 'Import does not write: compare first, then apply below.',
+      exported: 'Exported',
+      importReady: 'Decrypted; review the comparison below',
+      planSource: 'Source',
+      sourceFolder: 'Sync folder',
+      sourceBundle: 'Backup file',
       compare: 'Compare',
       apply: 'Apply',
       push: 'Publish this machine',
@@ -131,7 +159,7 @@ window.__ModuleLoader__.load({
 .dsh-bag p{margin:0;font-size:13px;line-height:19px;color:var(--dsw-alias-label-tertiary,#888)}
 .dsh-bag-card{border:1px solid var(--dsw-alias-line-regular,#e5e5e5);border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:10px;background:var(--dsw-alias-surface-primary,#fff)}
 .dsh-bag-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-.dsh-bag-row input[type=text]{flex:1;min-width:260px;padding:7px 9px;border-radius:7px;border:1px solid var(--dsw-alias-line-regular,#ddd);background:var(--dsw-alias-surface-primary,#fff);color:var(--dsw-alias-label-primary,#111);font-size:13px}
+.dsh-bag-row input[type=text],.dsh-bag-row input[type=password]{flex:1;min-width:260px;padding:7px 9px;border-radius:7px;border:1px solid var(--dsw-alias-line-regular,#ddd);background:var(--dsw-alias-surface-primary,#fff);color:var(--dsw-alias-label-primary,#111);font-size:13px}
 .dsh-bag button{padding:6px 12px;border-radius:7px;border:1px solid var(--dsw-alias-line-regular,#ddd);background:var(--dsw-alias-surface-primary,#fff);color:var(--dsw-alias-label-primary,#111);font-size:13px;cursor:pointer}
 .dsh-bag button:hover:not(:disabled){background:var(--dsw-alias-surface-secondary,#f6f6f6)}
 .dsh-bag button:disabled{opacity:.5;cursor:default}
@@ -224,6 +252,18 @@ window.__ModuleLoader__.load({
       return t(CLS_KEY[value] || 'clsSafe')
     }
 
+    function downloadText(filename, text) {
+      const blob = new Blob([text], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = filename
+      document.body.append(anchor)
+      anchor.click()
+      anchor.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
+    }
+
     function SettingsPage({ t }) {
       const [status, setStatus] = useState(null)
       const [draft, setDraft] = useState(null)
@@ -236,6 +276,10 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = useState('')
       const [error, setError] = useState('')
       const [message, setMessage] = useState('')
+      const [exportPassword, setExportPassword] = useState('')
+      const [importPassword, setImportPassword] = useState('')
+      const [importText, setImportText] = useState('')
+      const [importName, setImportName] = useState('')
 
       const refresh = useCallback(async () => {
         const [nextStatus, nextConfig, nextNamespaces, nextFiles] = await Promise.all([
@@ -337,6 +381,40 @@ window.__ModuleLoader__.load({
         setDoctor(null)
         await refresh()
       }), [refresh, run])
+
+      const exportBag = useCallback(() => run('export', async () => {
+        const result = await request('/export', {
+          method: 'POST',
+          body: JSON.stringify({ password: exportPassword }),
+        })
+        downloadText(result.filename, result.data)
+        setExportPassword('')
+        setMessage(`${t('exported')}: ${result.filename}`)
+      }), [exportPassword, run, t])
+
+      const importBag = useCallback(() => run('import', async () => {
+        if (importText === '') throw new Error(t('importFile'))
+        const next = await request('/import/plan', {
+          method: 'POST',
+          body: JSON.stringify({ file: importText, password: importPassword }),
+        })
+        setPlan(next)
+        setDecisions({})
+        setAllowExecutable(false)
+        setDoctor(null)
+        setImportPassword('')
+        setMessage(t('importReady'))
+      }), [importPassword, importText, run, t])
+
+      const chooseFile = useCallback(async event => {
+        const file = event.target.files && event.target.files[0]
+        if (!file) return
+        setImportName(file.name)
+        setImportText(await file.text())
+        setPlan(null)
+        setError('')
+        setMessage('')
+      }, [])
 
       const toggle = useCallback((field, id) => {
         setDraft(current => {
@@ -442,6 +520,35 @@ window.__ModuleLoader__.load({
             },
           })),
 
+        h('div', { className: 'dsh-bag-card' },
+          h('h3', null, t('backupTitle')),
+          h('p', null, t('backupDesc')),
+          h('div', { className: 'dsh-bag-row' },
+            h('input', {
+              type: 'password',
+              value: exportPassword,
+              placeholder: t('exportPassword'),
+              onChange: event => setExportPassword(event.target.value),
+            }),
+            h('button', { onClick: exportBag, disabled: busy !== '' }, t('exportButton'))),
+          h('p', null, t('exportHint')),
+          h('div', { className: 'dsh-bag-row' },
+            h('input', {
+              type: 'file',
+              accept: '.dshbag,application/json',
+              onChange: chooseFile,
+            }),
+            importName !== '' ? h('span', { className: 'dsh-bag-badge' }, importName) : null),
+          h('div', { className: 'dsh-bag-row' },
+            h('input', {
+              type: 'password',
+              value: importPassword,
+              placeholder: t('importPassword'),
+              onChange: event => setImportPassword(event.target.value),
+            }),
+            h('button', { onClick: importBag, disabled: busy !== '' || importText === '' }, t('importButton'))),
+          h('p', null, t('importHint'))),
+
         h('div', { className: 'dsh-bag-actions' },
           h('button', { className: 'primary', onClick: compare, disabled: busy !== '' }, t('compare')),
           h('button', { onClick: push, disabled: busy !== '' }, t('push')),
@@ -455,6 +562,7 @@ window.__ModuleLoader__.load({
           ? h('div', { className: 'dsh-bag-card' },
             h('h3', null, t('plan')),
             h('div', { className: 'dsh-bag-meta' },
+              h(Badge, null, `${t('planSource')}: ${plan.source === 'bundle' ? t('sourceBundle') : t('sourceFolder')}`),
               h(Badge, null, t('writes').replace('{count}', String(plan.writes))),
               h(Badge, { kind: plan.conflicts > 0 ? 'conflict' : '' }, t('conflicts').replace('{count}', String(plan.conflicts))),
               h(Badge, { kind: plan.executable > 0 ? 'executable' : '' }, t('executable').replace('{count}', String(plan.executable)))),

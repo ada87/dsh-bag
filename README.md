@@ -24,6 +24,15 @@ Restart `dsh web`, then open **Settings → Bag**.
 
 The sync folder is a normal folder. Any file-sync tool works, including one that only copies files and knows nothing about conflicts.
 
+### Encrypted backup file
+
+The same selection can travel as one password-encrypted `.dshbag` file:
+
+- **Export .dshbag** — PBKDF2-SHA256 (600k iterations) + AES-256-GCM.
+- **Import and compare** — decrypt, validate against the allowlist, and show the same plan as a folder compare. Nothing is written until you press Apply.
+
+The file holds only settings and profile files; credentials are never captured. A lost password cannot be recovered.
+
 ## What travels
 
 | Item | Default | Notes |
@@ -74,6 +83,7 @@ They are stripped before capture and are never overwritten by a peer.
 ## v1 limitations
 
 - **Folder backend only.** Git and WebDAV backends are intentionally deferred; the engine is written behind a small backend seam.
+- **One backup file, no history.** A `.dshbag` is a snapshot; exporting again does not keep older bundles.
 - **Live settings only.** A settings namespace is selectable only when its schema declares at least one `volatile` field, because that is what `ctx.settings.mutate()` accepts. Settings that require a restart are disabled in the picker.
 - **Deletions.** Removing a key inside a settings namespace propagates (it is part of the merge). Removing a whole file does not: a machine that lacks a selected file simply receives it.
 - **Agent preset directories.** Preset IDs travel with the `agent-presets` settings namespace; user preset directories are not copied yet.
@@ -94,6 +104,8 @@ All routes except `/dsh-bag/health` require a trusted request.
 | POST | `/dsh-bag/api/plan` | Compare and return a plan |
 | POST | `/dsh-bag/api/apply` | Apply a plan (optional per-path decisions, `allowExecutable`) |
 | POST | `/dsh-bag/api/push` | Publish this machine's snapshot |
+| POST | `/dsh-bag/api/export` | Encrypt the current selection into a `.dshbag` payload |
+| POST | `/dsh-bag/api/import/plan` | Decrypt a `.dshbag` and return a plan (no writes) |
 | POST | `/dsh-bag/api/doctor` | Diagnose folder, settings, journal, secrets |
 | POST | `/dsh-bag/api/recover` | Repair an interrupted apply |
 

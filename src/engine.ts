@@ -1,6 +1,13 @@
 import { copyFile, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { FolderBackend, writeAtomic, type RemoteSnapshot } from './backend.js'
+import { FolderBackend, writeAtomic, type RemoteItem, type RemoteSnapshot } from './backend.js'
+import {
+  decryptBundle,
+  encryptBundle,
+  PAYLOAD_FORMAT,
+  PAYLOAD_VERSION,
+  type BundlePayload,
+} from './bundle.js'
 import { SyncError, messageOf } from './errors.js'
 import type { SettingsDescriptorLike, SettingsPathOpLike, SettingsService } from './host.js'
 import { clearJournal, journalIncomplete, readJournal, writeJournal, type Journal } from './journal.js'
@@ -80,8 +87,11 @@ interface Target {
 interface PlanEntry {
   plan: SyncPlan
   createdAt: number
+  source: 'folder' | 'bundle'
   remoteDigest: string
+  readRemote: () => Promise<RemoteSnapshot>
   localHashes: Map<string, string | undefined>
+  captureIds: string[]
   targets: Map<string, Target>
   revisions: Map<string, number>
 }
@@ -200,11 +210,64 @@ export class SyncEngine {
     const config = await this.requireConfigured()
     const capture = await this.capture(config)
     assertClean(capture.findings)
-    const state = await this.loadState()
     const backend = new FolderBackend(config.syncDir, config.deviceId, config.deviceName)
     await backend.ensure()
     const remote = await backend.readRemote()
+    return this.installPlan(config, capture, remote, () => backend.readRemote(), 'folder', [])
+  }
 
+  /** Encrypt the currently selected items into one portable file. */
+  async exportBundle(password: string): Promise<{ filename: string; data: string; items: number; bytes: number }> {
+    const config = await this.loadConfig()
+    const capture = await this.capture(config)
+    assertClean(capture.findings)
+    if (capture.items.size === 0) throw new SyncError('bundle', 'nothing is selected: choose settings or files first')
+    const payload: BundlePayload = {
+      format: PAYLOAD_FORMAT,
+      version: PAYLOAD_VERSION,
+      schemaVersion: SCHEMA_VERSION,
+      createdAt: new Date().toISOString(),
+      device: { id: config.deviceId, name: config.deviceName },
+      items: Object.fromEntries(
+        [...capture.items].map(([id, item]) => [id, { cls: item.cls, hash: item.hash, value: item.value }]),
+      ),
+      warnings: capture.warnings.slice(0, 20),
+    }
+    const envelope = await encryptBundle(payload, password)
+    const data = `${JSON.stringify(envelope, null, 2)}\n`
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+    const name = config.deviceName.replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 32) || 'device'
+    return {
+      filename: `dsh-bag-${name}-${stamp}.dshbag`,
+      data,
+      items: capture.items.size,
+      bytes: Buffer.byteLength(data, 'utf8'),
+    }
+  }
+
+  /** Decrypt a bundle and compare it against this machine without writing. */
+  async planBundle(fileText: string, password: string): Promise<SyncPlan> {
+    const config = await this.loadConfig()
+    const payload = await decryptBundle(fileText, password)
+    const ids = new Set(Object.keys(payload.items))
+    if (ids.size === 0) throw new SyncError('bundle', 'the bundle contains no items')
+    const capture = await this.capture(config, ids)
+    const built = this.remoteFromPayload(payload, capture, config)
+    if (built.remote.items.size === 0) {
+      throw new SyncError('bundle', built.warnings[0] ?? 'the bundle has no items this profile can apply')
+    }
+    return this.installPlan(config, capture, built.remote, async () => built.remote, 'bundle', built.warnings)
+  }
+
+  private async installPlan(
+    config: PersistedConfig,
+    capture: Capture,
+    remote: RemoteSnapshot,
+    readRemote: () => Promise<RemoteSnapshot>,
+    source: 'folder' | 'bundle',
+    extraWarnings: string[],
+  ): Promise<SyncPlan> {
+    const state = await this.loadState()
     const ids = new Set<string>([
       ...capture.items.keys(),
       ...remote.items.keys(),
@@ -212,7 +275,7 @@ export class SyncEngine {
     ])
     const items: PlanItem[] = []
     const targets = new Map<string, Target>()
-    const warnings = [...capture.warnings]
+    const warnings = [...extraWarnings, ...capture.warnings]
 
     for (const id of [...ids].sort()) {
       const parsed = parseItemId(id)
@@ -284,11 +347,12 @@ export class SyncEngine {
     }
 
     if (items.length === 0) warnings.push('nothing is selected yet: choose settings namespaces or profile files')
-    if (config.syncDir === '') warnings.push('set the sync folder first')
+    if (source === 'folder' && config.syncDir === '') warnings.push('set the sync folder first')
 
     const plan: SyncPlan = {
       id: randomId(8),
       createdAt: Date.now(),
+      source,
       syncDir: config.syncDir,
       items,
       warnings,
@@ -300,8 +364,11 @@ export class SyncEngine {
     this.plans.set(plan.id, {
       plan,
       createdAt: Date.now(),
+      source,
       remoteDigest: remote.digest,
+      readRemote,
       localHashes: new Map(items.map(item => [item.id, capture.items.get(item.id)?.hash])),
+      captureIds: [...capture.items.keys()],
       targets,
       revisions: capture.revisions,
     })
@@ -313,6 +380,98 @@ export class SyncEngine {
     return plan
   }
 
+  private remoteFromPayload(
+    payload: BundlePayload,
+    capture: Capture,
+    config: PersistedConfig,
+  ): { remote: RemoteSnapshot; warnings: string[] } {
+    const items = new Map<string, RemoteItem>()
+    const warnings: string[] = []
+    const updatedAt = Number.isFinite(Date.parse(payload.createdAt)) ? Date.parse(payload.createdAt) : Date.now()
+
+    for (const [id, entry] of Object.entries(payload.items)) {
+      const parsed = parseItemId(id)
+      if (parsed === undefined) {
+        warnings.push(`bundle item ignored (not in the allowlist): ${id}`)
+        continue
+      }
+      if (parsed.kind === 'settings') {
+        if (!capture.items.has(id)) {
+          warnings.push(`settings namespace ignored (not live in this profile): ${parsed.ns}`)
+          continue
+        }
+        const value = projectVolatile(
+          capture.schemas.get(parsed.ns),
+          stripLocalOnly(entry.value, config.localOnlyKeys[parsed.ns] ?? []),
+        )
+        if (value === undefined || typeof value !== 'object' || value === null || Array.isArray(value)) {
+          warnings.push(`settings namespace ignored (no live fields): ${parsed.ns}`)
+          continue
+        }
+        const text = canonicalJson(value)
+        if (Buffer.byteLength(text, 'utf8') > MAX_ITEM_TEXT_BYTES) {
+          warnings.push(`settings namespace ignored (too large): ${parsed.ns}`)
+          continue
+        }
+        assertClean(scanText(`settings:${parsed.ns}`, text))
+        items.set(id, {
+          id,
+          hash: sha256(text),
+          cls: 'safe-live',
+          value,
+          updatedAt,
+          device: 'bundle',
+        })
+        continue
+      }
+      if (typeof entry.value !== 'string') {
+        warnings.push(`file ignored (not text): ${parsed.spec.rel}`)
+        continue
+      }
+      const text = normalizeText(entry.value)
+      if (Buffer.byteLength(text, 'utf8') > MAX_ITEM_TEXT_BYTES) {
+        warnings.push(`file ignored (too large): ${parsed.spec.rel}`)
+        continue
+      }
+      assertClean(scanText(parsed.spec.rel, text))
+      items.set(id, {
+        id,
+        hash: sha256(text),
+        cls: parsed.spec.cls,
+        value: text,
+        updatedAt,
+        device: 'bundle',
+      })
+    }
+
+    const digest = sha256(canonicalJson([...items.values()].map(item => [item.id, item.hash]).sort()))
+    return { remote: { items, devices: 1, digest }, warnings }
+  }
+
+  /** A restored bundle becomes part of this machine's selection. */
+  private async adoptBundleSelection(entry: PlanEntry): Promise<PersistedConfig> {
+    const config = await this.loadConfig()
+    const namespaces = new Set(config.selectedNamespaces)
+    const files = new Set(config.selectedFiles)
+    const remote = await entry.readRemote()
+    for (const id of remote.items.keys()) {
+      const parsed = parseItemId(id)
+      if (parsed === undefined) continue
+      if (parsed.kind === 'settings') namespaces.add(parsed.ns)
+      else files.add(id)
+    }
+    if (namespaces.size === config.selectedNamespaces.length && files.size === config.selectedFiles.length) {
+      return config
+    }
+    const next: PersistedConfig = {
+      ...config,
+      selectedNamespaces: [...namespaces],
+      selectedFiles: [...files],
+    }
+    await saveConfig(this.paths, next)
+    return next
+  }
+
   async apply(input: ApplyInput): Promise<ApplyResult> {
     if (typeof input?.planId !== 'string') throw new SyncError('validation', 'planId is required')
     const entry = this.plans.get(input.planId)
@@ -321,18 +480,20 @@ export class SyncEngine {
       this.plans.delete(input.planId)
       throw new SyncError('plan-stale', 'the plan expired; compare again')
     }
-    const config = await this.requireConfigured()
-    const capture = await this.capture(config)
+    const config = await this.loadConfig()
+    if (entry.source === 'folder' && config.syncDir === '') {
+      throw new SyncError('config', 'set the sync folder first')
+    }
+    const capture = await this.capture(config, entry.source === 'bundle' ? new Set(entry.captureIds) : undefined)
     for (const item of entry.plan.items) {
       const current = capture.items.get(item.id)?.hash
       if (current !== entry.localHashes.get(item.id)) {
         throw new SyncError('plan-stale', `local item changed since the plan: ${item.id}`)
       }
     }
-    const backend = new FolderBackend(config.syncDir, config.deviceId, config.deviceName)
-    const remote = await backend.readRemote()
+    const remote = await entry.readRemote()
     if (remote.digest !== entry.remoteDigest) {
-      throw new SyncError('plan-stale', 'the sync folder changed since the plan; compare again')
+      throw new SyncError('plan-stale', entry.source === 'bundle' ? 'the bundle changed' : 'the sync folder changed since the plan; compare again')
     }
     const revisions = await this.revisions()
     for (const item of entry.plan.items) {
@@ -454,9 +615,10 @@ export class SyncEngine {
     }
 
     if (fileWrites.length === 0 && settingsWrites.length === 0) {
+      const finalConfig = entry.source === 'bundle' ? await this.adoptBundleSelection(entry) : config
       const state = await this.loadState()
-      state.base.items = baseNext
-      state.rejected = pruneRejected(rejectedNext, config)
+      state.base.items = entry.source === 'bundle' ? pruneBase(baseNext, finalConfig) : baseNext
+      state.rejected = pruneRejected(rejectedNext, finalConfig)
       state.lastOperation = { id: randomId(6), op: 'apply', at: new Date().toISOString(), ok: true, message: 'nothing to write' }
       await saveState(this.paths, state)
       return { applied: [], skipped, conflicts: [], restartRequired, installRequired, operation: state.lastOperation }
@@ -553,9 +715,10 @@ export class SyncEngine {
 
     journal.status = 'DONE'
     await writeJournal(this.paths.journal, journal)
+    const finalConfig = entry.source === 'bundle' ? await this.adoptBundleSelection(entry) : config
     const state = await this.loadState()
-    state.base.items = baseNext
-    state.rejected = pruneRejected(rejectedNext, config)
+    state.base.items = entry.source === 'bundle' ? pruneBase(baseNext, finalConfig) : baseNext
+    state.rejected = pruneRejected(rejectedNext, finalConfig)
     state.lastOperation = {
       id: operationId,
       op: 'apply',
@@ -693,14 +856,26 @@ export class SyncEngine {
 
   // ---------------------------------------------------------------- internals
 
-  private async capture(config: PersistedConfig): Promise<Capture> {
+  private async capture(config: PersistedConfig, only?: Set<string>): Promise<Capture> {
     const items = new Map<string, CapturedItem>()
     const warnings: string[] = []
     const findings: Finding[] = []
     const revisions = new Map<string, number>()
     const schemas = new Map<string, unknown>()
+    const namespaces = only === undefined
+      ? config.selectedNamespaces
+      : [...only].flatMap(id => {
+        const parsed = parseItemId(id)
+        return parsed?.kind === 'settings' ? [parsed.ns] : []
+      })
+    const fileIds = only === undefined
+      ? config.selectedFiles
+      : [...only].flatMap(id => {
+        const parsed = parseItemId(id)
+        return parsed?.kind === 'file' ? [id] : []
+      })
 
-    if (config.selectedNamespaces.length > 0) {
+    if (namespaces.length > 0) {
       if (this.settings === undefined) {
         warnings.push('the settings service is unavailable; selected namespaces were skipped')
       } else {
@@ -711,7 +886,7 @@ export class SyncEngine {
           warnings.push(`could not read settings: ${messageOf(error)}`)
         }
         const byNs = new Map(descriptors.map(descriptor => [descriptor.ns, descriptor]))
-        for (const ns of config.selectedNamespaces) {
+        for (const ns of namespaces) {
           const descriptor = byNs.get(ns)
           if (descriptor === undefined) {
             warnings.push(`settings namespace "${ns}" is not present in this profile`)
@@ -740,7 +915,7 @@ export class SyncEngine {
       }
     }
 
-    for (const id of config.selectedFiles) {
+    for (const id of fileIds) {
       const spec = fileSpec(id)
       if (spec === undefined) continue
       const live = join(this.home, spec.rel)
