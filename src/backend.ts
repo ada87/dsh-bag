@@ -20,10 +20,18 @@ export interface RemoteSnapshot {
   digest: string
 }
 
+/** Storage seam shared by the folder and Git backends. */
+export interface SyncBackend {
+  ensure(): Promise<void>
+  readOwn(): Promise<DeviceFile | undefined>
+  readRemote(): Promise<RemoteSnapshot>
+  writeOwn(items: Record<string, SnapshotItem>): Promise<DeviceFile>
+}
+
 const CLASSES: readonly ItemClass[] = ['safe-live', 'restart', 'executable']
 
 /** Folder backend: each device owns one snapshot file, so no write collides. */
-export class FolderBackend {
+export class FolderBackend implements SyncBackend {
   constructor(
     readonly syncDir: string,
     readonly deviceId: string,
@@ -81,25 +89,15 @@ export class FolderBackend {
       throw new SyncError('backend', `the sync folder holds more than ${MAX_DEVICES} device snapshots`)
     }
 
-    const items = new Map<string, RemoteItem>()
-    const digestParts: string[] = []
-    let devices = 0
+    const entries: Array<{ device: string; file: DeviceFile }> = []
     for (const name of names) {
       const path = join(this.devicesDir, name)
       const file = await readDeviceFile(path)
       if (file === undefined) continue
-      devices += 1
       const device = file.device.id === this.deviceId ? this.deviceId : file.device.id
-      digestParts.push(`${device}:${file.updatedAt}:${Object.keys(file.items).length}`)
-      for (const [id, entry] of Object.entries(file.items)) {
-        const current = items.get(id)
-        if (current === undefined || entry.updatedAt > current.updatedAt
-          || (entry.updatedAt === current.updatedAt && device > current.device)) {
-          items.set(id, { id, hash: entry.hash, cls: entry.cls, value: entry.value, updatedAt: entry.updatedAt, device })
-        }
-      }
+      entries.push({ device, file })
     }
-    return { items, devices, digest: sha256(digestParts.join('|')) }
+    return mergeDeviceFiles(entries)
   }
 
   /**
@@ -148,7 +146,7 @@ function safeHostname(): string {
   }
 }
 
-async function readDeviceFile(path: string): Promise<DeviceFile | undefined> {
+export async function readDeviceFile(path: string): Promise<DeviceFile | undefined> {
   let info
   try {
     info = await stat(path)
@@ -196,6 +194,30 @@ async function readDeviceFile(path: string): Promise<DeviceFile | undefined> {
 function isValidId(id: string): boolean {
   return id.startsWith('settings:') || id.startsWith('file:') || id.startsWith('skill:')
     || id.startsWith('preset:') || id === 'hooks'
+}
+
+/** Merge device snapshots, newest item timestamp wins; ties break by device id. */
+export function mergeDeviceFiles(entries: readonly { device: string; file: DeviceFile }[]): RemoteSnapshot {
+  const items = new Map<string, RemoteItem>()
+  const digestParts: string[] = []
+  for (const entry of [...entries].sort((a, b) => a.device.localeCompare(b.device))) {
+    digestParts.push(`${entry.device}:${entry.file.updatedAt}:${Object.keys(entry.file.items).length}`)
+    for (const [id, item] of Object.entries(entry.file.items)) {
+      const current = items.get(id)
+      if (current === undefined || item.updatedAt > current.updatedAt
+        || (item.updatedAt === current.updatedAt && entry.device > current.device)) {
+        items.set(id, {
+          id,
+          hash: item.hash,
+          cls: item.cls,
+          value: item.value,
+          updatedAt: item.updatedAt,
+          device: entry.device,
+        })
+      }
+    }
+  }
+  return { items, devices: entries.length, digest: sha256(digestParts.join('|')) }
 }
 
 /** Write a sibling temp file then rename, retrying Windows transient locks. */

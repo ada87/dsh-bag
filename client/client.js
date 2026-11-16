@@ -21,6 +21,14 @@ window.__ModuleLoader__.load({
       desc: '把选中的设置和配置文件装进一个同步文件夹，换台机器打开就有。默认只同步你勾选的内容；密钥类字段不会离开本机。',
       folder: '同步文件夹',
       folderHint: '填一个你已经在同步的目录，例如 iCloud、OneDrive、Dropbox、Syncthing 或网络盘。',
+      backend: '分发方式',
+      backendFolder: '文件夹',
+      backendGit: 'Git 仓库',
+      gitUrl: 'Git 远程地址',
+      gitUrlHint: '例如 git@github.com:you/dsh-bag-config.git。认证走你现有的 git 环境（credential helper / SSH），不保存凭据。',
+      gitBranch: '分支',
+      gitBranchHint: '默认 main。每个设备只写自己的 devices/<id>.json，正常情况不会冲突。',
+      gitNote: 'Git 后端需要本机安装 git，并能非交互地 push。',
       save: '保存',
       saved: '已保存',
       namespaces: '设置命名空间',
@@ -43,6 +51,7 @@ window.__ModuleLoader__.load({
       planSource: '来源',
       sourceFolder: '同步文件夹',
       sourceBundle: '备份文件',
+      sourceGit: 'Git 仓库',
       skillsTitle: 'Skills',
       skillsHint: '只同步勾选的 skill 目录。Claude Code 的 skill 目录格式和 dsh 基本一致。',
       skillRootDsh: 'dsh 专属（~/.dsh/skills）',
@@ -105,6 +114,14 @@ window.__ModuleLoader__.load({
       desc: 'Put selected settings and profile files into one synced folder; another machine opens it and has them. Only checked items travel, and secret-shaped values never leave the machine.',
       folder: 'Sync folder',
       folderHint: 'Pick a folder you already sync: iCloud, OneDrive, Dropbox, Syncthing or a network share.',
+      backend: 'Delivery',
+      backendFolder: 'Folder',
+      backendGit: 'Git repository',
+      gitUrl: 'Git remote',
+      gitUrlHint: 'For example git@github.com:you/dsh-bag-config.git. Authentication uses your existing git environment; credentials are never stored.',
+      gitBranch: 'Branch',
+      gitBranchHint: 'Defaults to main. Each device writes only its own devices/<id>.json, so pushes do not collide.',
+      gitNote: 'The Git backend needs git installed and non-interactive push access.',
       save: 'Save',
       saved: 'Saved',
       namespaces: 'Settings namespaces',
@@ -127,6 +144,7 @@ window.__ModuleLoader__.load({
       planSource: 'Source',
       sourceFolder: 'Sync folder',
       sourceBundle: 'Backup file',
+      sourceGit: 'Git repository',
       skillsTitle: 'Skills',
       skillsHint: 'Only checked skill directories travel. Claude Code\'s skill layout is close to dsh\'s.',
       skillRootDsh: 'dsh only (~/.dsh/skills)',
@@ -353,7 +371,10 @@ window.__ModuleLoader__.load({
           method: 'PUT',
           body: JSON.stringify({
             patch: {
+              backend: draft.backend,
               syncDir: draft.syncDir,
+              gitUrl: draft.gitUrl,
+              gitBranch: draft.gitBranch,
               selectedNamespaces: draft.selectedNamespaces,
               selectedFiles: draft.selectedFiles,
               selectedSkills: draft.selectedSkills,
@@ -512,6 +533,9 @@ window.__ModuleLoader__.load({
           h('p', null, t('desc')),
           h('div', { className: 'dsh-bag-meta' },
             h(Badge, null, `${t('device')}: ${status.device.name}`),
+            h(Badge, null, `${t('backend')}: ${status.backend === 'git' ? t('backendGit') : t('backendFolder')}`),
+            h(Badge, { title: status.backend === 'git' ? status.gitUrl : status.syncDir },
+              status.backend === 'git' ? status.gitUrl : status.syncDir),
             h(Badge, { kind: status.journal === 'incomplete' ? 'conflict' : '' },
               `${t('journal')}: ${status.journal === 'incomplete' ? t('journalBad') : t('journalOk')}`),
             h(Badge, null, t('counts')
@@ -530,18 +554,61 @@ window.__ModuleLoader__.load({
             : null),
 
         h('div', { className: 'dsh-bag-card' },
-          h('h3', null, t('folder')),
-          h('p', null, t('folderHint')),
+          h('h3', null, t('backend')),
           h('div', { className: 'dsh-bag-row' },
-            h('input', {
-              type: 'text',
-              value: draft.syncDir,
-              placeholder: 'D:\\sync\\dsh-bag',
-              onChange: event => {
-                setDraft({ ...draft, syncDir: event.target.value })
-                setPlan(null)
-              },
-            }),
+            h('label', null,
+              h('input', {
+                type: 'radio',
+                name: 'dsh-bag-backend',
+                checked: draft.backend !== 'git',
+                onChange: () => { setDraft({ ...draft, backend: 'folder' }); setPlan(null) },
+              }),
+              t('backendFolder')),
+            h('label', null,
+              h('input', {
+                type: 'radio',
+                name: 'dsh-bag-backend',
+                checked: draft.backend === 'git',
+                onChange: () => { setDraft({ ...draft, backend: 'git' }); setPlan(null) },
+              }),
+              t('backendGit'))),
+          draft.backend === 'git'
+            ? h('div', null,
+              h('p', null, t('gitUrlHint')),
+              h('div', { className: 'dsh-bag-row' },
+                h('input', {
+                  type: 'text',
+                  value: draft.gitUrl,
+                  placeholder: 'git@github.com:you/dsh-bag-config.git',
+                  onChange: event => {
+                    setDraft({ ...draft, gitUrl: event.target.value })
+                    setPlan(null)
+                  },
+                }),
+                h('input', {
+                  type: 'text',
+                  value: draft.gitBranch,
+                  placeholder: 'main',
+                  style: { flex: '0 0 140px', minWidth: '140px' },
+                  onChange: event => {
+                    setDraft({ ...draft, gitBranch: event.target.value })
+                    setPlan(null)
+                  },
+                })),
+              h('p', null, t('gitNote')))
+            : h('div', null,
+              h('p', null, t('folderHint')),
+              h('div', { className: 'dsh-bag-row' },
+                h('input', {
+                  type: 'text',
+                  value: draft.syncDir,
+                  placeholder: 'D:\\sync\\dsh-bag',
+                  onChange: event => {
+                    setDraft({ ...draft, syncDir: event.target.value })
+                    setPlan(null)
+                  },
+                }))),
+          h('div', { className: 'dsh-bag-actions' },
             h('button', { onClick: save, disabled: busy !== '' }, t('save')))),
 
         h('div', { className: 'dsh-bag-card' },
@@ -712,7 +779,7 @@ window.__ModuleLoader__.load({
           ? h('div', { className: 'dsh-bag-card' },
             h('h3', null, t('plan')),
             h('div', { className: 'dsh-bag-meta' },
-              h(Badge, null, `${t('planSource')}: ${plan.source === 'bundle' ? t('sourceBundle') : t('sourceFolder')}`),
+              h(Badge, null, `${t('planSource')}: ${plan.source === 'bundle' ? t('sourceBundle') : plan.source === 'git' ? t('sourceGit') : t('sourceFolder')}`),
               h(Badge, null, t('writes').replace('{count}', String(plan.writes))),
               h(Badge, { kind: plan.conflicts > 0 ? 'conflict' : '' }, t('conflicts').replace('{count}', String(plan.conflicts))),
               h(Badge, { kind: plan.executable > 0 ? 'executable' : '' }, t('executable').replace('{count}', String(plan.executable)))),

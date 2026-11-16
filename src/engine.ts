@@ -1,6 +1,7 @@
 import { copyFile, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { FolderBackend, writeAtomic, type RemoteItem, type RemoteSnapshot } from './backend.js'
+import { FolderBackend, writeAtomic, type RemoteItem, type RemoteSnapshot, type SyncBackend } from './backend.js'
+import { GitBackend } from './backend-git.js'
 import {
   decryptBundle,
   encryptBundle,
@@ -103,7 +104,7 @@ interface Target {
 interface PlanEntry {
   plan: SyncPlan
   createdAt: number
-  source: 'folder' | 'bundle'
+  source: 'folder' | 'git' | 'bundle'
   remoteDigest: string
   readRemote: () => Promise<RemoteSnapshot>
   localHashes: Map<string, string | undefined>
@@ -161,21 +162,24 @@ export class SyncEngine {
     } catch (error) {
       warnings.push(`local snapshot failed: ${messageOf(error)}`)
     }
-    if (config.syncDir !== '') {
+    if (this.isConfigured(config)) {
       try {
-        const backend = new FolderBackend(config.syncDir, config.deviceId, config.deviceName)
+        const backend = this.backend(config)
         const remote = await backend.readRemote()
         remoteItems = remote.items.size
         remoteDevices = remote.devices
       } catch (error) {
-        warnings.push(`sync folder failed: ${messageOf(error)}`)
+        warnings.push(`sync backend failed: ${messageOf(error)}`)
       }
     }
     const journal = await readJournal(this.paths.journal)
     return {
       schemaVersion: SCHEMA_VERSION,
-      configured: config.syncDir !== '',
+      configured: this.isConfigured(config),
+      backend: config.backend,
       syncDir: config.syncDir,
+      gitUrl: config.gitUrl,
+      gitBranch: config.gitBranch,
       device: { id: config.deviceId, name: config.deviceName },
       auth: 'trusted',
       settingsWritable: this.settings !== undefined && this.settings.writable !== false,
@@ -201,7 +205,12 @@ export class SyncEngine {
     const current = await this.loadConfig()
     const next = normalizeConfigPatch(current, patch, this.home)
     await saveConfig(this.paths, next)
-    if (next.syncDir !== current.syncDir) this.plans.clear()
+    if (next.syncDir !== current.syncDir
+      || next.backend !== current.backend
+      || next.gitUrl !== current.gitUrl
+      || next.gitBranch !== current.gitBranch) {
+      this.plans.clear()
+    }
     const state = await this.loadState()
     state.base.items = pruneBase(state.base.items, next)
     state.rejected = pruneRejected(state.rejected, next)
@@ -277,10 +286,10 @@ export class SyncEngine {
     const config = await this.requireConfigured()
     const capture = await this.capture(config)
     assertClean(capture.findings)
-    const backend = new FolderBackend(config.syncDir, config.deviceId, config.deviceName)
+    const backend = this.backend(config)
     await backend.ensure()
     const remote = await backend.readRemote()
-    return this.installPlan(config, capture, remote, () => backend.readRemote(), 'folder', [])
+    return this.installPlan(config, capture, remote, () => backend.readRemote(), config.backend, [])
   }
 
   /** Encrypt the currently selected items into one portable file. */
@@ -331,7 +340,7 @@ export class SyncEngine {
     capture: Capture,
     remote: RemoteSnapshot,
     readRemote: () => Promise<RemoteSnapshot>,
-    source: 'folder' | 'bundle',
+    source: 'folder' | 'git' | 'bundle',
     extraWarnings: string[],
   ): Promise<SyncPlan> {
     const state = await this.loadState()
@@ -424,6 +433,7 @@ export class SyncEngine {
 
     if (items.length === 0) warnings.push('nothing is selected yet: choose settings namespaces or profile files')
     if (source === 'folder' && config.syncDir === '') warnings.push('set the sync folder first')
+    if (source === 'git' && config.gitUrl === '') warnings.push('set the Git remote first')
 
     const plan: SyncPlan = {
       id: randomId(8),
@@ -614,6 +624,9 @@ export class SyncEngine {
     const config = await this.loadConfig()
     if (entry.source === 'folder' && config.syncDir === '') {
       throw new SyncError('config', 'set the sync folder first')
+    }
+    if (entry.source === 'git' && config.gitUrl === '') {
+      throw new SyncError('config', 'set the Git remote first')
     }
     const capture = await this.capture(config, entry.source === 'bundle' ? new Set(entry.captureIds) : undefined)
     for (const item of entry.plan.items) {
@@ -904,7 +917,7 @@ export class SyncEngine {
     const config = await this.requireConfigured()
     const capture = await this.capture(config)
     assertClean(capture.findings)
-    const backend = new FolderBackend(config.syncDir, config.deviceId, config.deviceName)
+    const backend = this.backend(config)
     await backend.ensure()
     const snapshot: Record<string, SnapshotItem> = {}
     for (const [id, item] of capture.items) {
@@ -939,7 +952,17 @@ export class SyncEngine {
   async doctor(): Promise<DoctorReport> {
     const issues: DoctorIssue[] = []
     const config = await this.loadConfig()
-    if (config.syncDir === '') {
+    if (config.backend === 'git') {
+      if (config.gitUrl === '') {
+        issues.push({ code: 'git-url-missing', severity: 'error', message: 'no Git remote is configured' })
+      } else {
+        try {
+          await GitBackend.probe(config.gitUrl, config.gitBranch)
+        } catch (error) {
+          issues.push({ code: 'git-remote', severity: 'error', message: messageOf(error) })
+        }
+      }
+    } else if (config.syncDir === '') {
       issues.push({ code: 'sync-dir-missing', severity: 'error', message: 'no sync folder is configured' })
     } else {
       try {
@@ -968,10 +991,9 @@ export class SyncEngine {
     } else if (this.settings.writable === false) {
       issues.push({ code: 'settings-readonly', severity: 'warn', message: 'the active profile does not accept settings writes' })
     }
-    if (config.syncDir !== '') {
+    if (config.backend === 'folder' && config.syncDir !== '') {
       try {
-        const backend = new FolderBackend(config.syncDir, config.deviceId, config.deviceName)
-        const remote = await backend.readRemote()
+        const remote = await this.backend(config).readRemote()
         if (remote.devices === 0) {
           issues.push({ code: 'no-devices', severity: 'info', message: 'the sync folder has no device snapshots yet' })
         }
@@ -1020,6 +1042,17 @@ export class SyncEngine {
     if (kind === 'skill') return resolveSkillsRoot(this.home, config.skillRoot)
     if (kind === 'preset') return join(this.home, '.agent-presets')
     return this.home
+  }
+
+  private isConfigured(config: PersistedConfig): boolean {
+    return config.backend === 'git' ? config.gitUrl !== '' : config.syncDir !== ''
+  }
+
+  private backend(config: PersistedConfig): SyncBackend {
+    if (config.backend === 'git') {
+      return new GitBackend(join(this.paths.stateDir, 'git'), config.gitUrl, config.gitBranch, config.deviceId, config.deviceName)
+    }
+    return new FolderBackend(config.syncDir, config.deviceId, config.deviceName)
   }
 
   private async capture(config: PersistedConfig, only?: Set<string>): Promise<Capture> {
@@ -1296,11 +1329,15 @@ export class SyncEngine {
     }
   }
 
-  private async requireConfigured(): Promise<PersistedConfig & { syncDir: string }> {
+  private async requireConfigured(): Promise<PersistedConfig> {
     const config = await this.loadConfig()
-    if (config.syncDir === '') throw new SyncError('config', 'set the sync folder first')
-    assertSyncDir(config.syncDir, this.home)
-    return config as PersistedConfig & { syncDir: string }
+    if (config.backend === 'git') {
+      if (config.gitUrl === '') throw new SyncError('config', 'set the Git remote first')
+    } else {
+      if (config.syncDir === '') throw new SyncError('config', 'set the sync folder first')
+      assertSyncDir(config.syncDir, this.home)
+    }
+    return config
   }
 }
 

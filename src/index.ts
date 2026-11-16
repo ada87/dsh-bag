@@ -111,9 +111,10 @@ function formatScan(scan: SkillScan): string {
 }
 
 function formatStatus(status: Status): string {
+  const target = status.backend === 'git' ? status.gitUrl : status.syncDir
   return [
     `设备: ${status.device.name}`,
-    `同步目录: ${status.syncDir || '(未配置)'}`,
+    `分发: ${status.backend === 'git' ? 'Git' : '文件夹'} ${target || '(未配置)'}`,
     `本地 ${status.counts.localItems} 项 · 远端 ${status.counts.remoteItems} 项 · ${status.counts.remoteDevices} 台设备`,
     `已选: ${status.counts.selectedNamespaces} 个设置命名空间 · ${status.counts.selectedFiles} 个文件 · ${status.counts.selectedSkills} 个 skill`,
     `上次写入: ${status.journal === 'incomplete' ? '未完成，需要修复' : '正常'}`,

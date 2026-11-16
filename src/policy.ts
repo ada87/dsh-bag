@@ -119,6 +119,35 @@ export function assertSyncHooks(input: unknown): boolean {
   return input
 }
 
+export type BackendKind = 'folder' | 'git'
+
+export function assertBackend(input: unknown): BackendKind {
+  if (input !== 'folder' && input !== 'git') throw new SyncError('validation', 'backend must be "folder" or "git"')
+  return input
+}
+
+export function assertGitUrl(input: unknown): string {
+  if (typeof input !== 'string' || input.trim() === '') throw new SyncError('validation', 'gitUrl is required')
+  const url = input.trim()
+  if (/\s/.test(url)) throw new SyncError('validation', 'gitUrl must not contain whitespace')
+  if (/^https?:\/\/[^/]*@/i.test(url)) {
+    throw new SyncError('validation', 'gitUrl must not embed credentials; use a credential helper or SSH')
+  }
+  const allowed = /^(?:https?|ssh|git|file):\/\//i.test(url)
+    || /^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+:/.test(url)
+  if (!allowed) throw new SyncError('validation', 'gitUrl must be https://, ssh://, git://, file:// or user@host:path')
+  return url
+}
+
+export function assertGitBranch(input: unknown): string {
+  if (typeof input !== 'string' || input.trim() === '') throw new SyncError('validation', 'gitBranch is required')
+  const branch = input.trim()
+  if (!/^(?!-)(?!.*\.\.)[A-Za-z0-9._/-]{1,120}$/.test(branch)) {
+    throw new SyncError('validation', `invalid git branch: ${branch}`)
+  }
+  return branch
+}
+
 export function assertNamespace(ns: unknown): string {
   if (typeof ns !== 'string' || !NAMESPACE_RE.test(ns)) {
     throw new SyncError('validation', `invalid settings namespace: ${String(ns)}`)

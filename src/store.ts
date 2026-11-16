@@ -3,7 +3,19 @@ import { join } from 'node:path'
 import { mkdir, readFile } from 'node:fs/promises'
 import { writeAtomic } from './backend.js'
 import { SyncError } from './errors.js'
-import { assertLocalOnlyMap, assertSelectedFiles, assertSelectedNamespaces, assertSelectedPresets, assertSelectedSkills, assertSkillRoot, assertSyncHooks, assertSyncDir } from './policy.js'
+import {
+  assertBackend,
+  assertGitBranch,
+  assertGitUrl,
+  assertLocalOnlyMap,
+  assertSelectedFiles,
+  assertSelectedNamespaces,
+  assertSelectedPresets,
+  assertSelectedSkills,
+  assertSkillRoot,
+  assertSyncHooks,
+  assertSyncDir,
+} from './policy.js'
 import { CONFIG_FILE, JOURNAL_FILE, SCHEMA_VERSION, STATE_DIR_NAME, STATE_FILE, type PersistedConfig, type PersistedState } from './protocol.js'
 import { isPlainObject, randomId } from './util.js'
 
@@ -35,7 +47,10 @@ export function defaultConfig(): PersistedConfig {
     schemaVersion: SCHEMA_VERSION,
     deviceId: randomId(6),
     deviceName: safeHostname(),
+    backend: 'folder',
     syncDir: '',
+    gitUrl: '',
+    gitBranch: 'main',
     selectedNamespaces: [],
     selectedFiles: [],
     selectedSkills: [],
@@ -63,7 +78,10 @@ export async function loadConfig(paths: Paths): Promise<PersistedConfig> {
     schemaVersion: SCHEMA_VERSION,
     deviceId: typeof raw.deviceId === 'string' && raw.deviceId.length >= 4 ? raw.deviceId : fallback.deviceId,
     deviceName: typeof raw.deviceName === 'string' && raw.deviceName.trim() !== '' ? raw.deviceName : fallback.deviceName,
+    backend: raw.backend === 'git' ? 'git' : 'folder',
     syncDir: typeof raw.syncDir === 'string' ? raw.syncDir : '',
+    gitUrl: typeof raw.gitUrl === 'string' ? raw.gitUrl : '',
+    gitBranch: typeof raw.gitBranch === 'string' && raw.gitBranch.trim() !== '' ? raw.gitBranch : 'main',
     selectedNamespaces: Array.isArray(raw.selectedNamespaces) ? raw.selectedNamespaces.filter((ns): ns is string => typeof ns === 'string') : [],
     selectedFiles: Array.isArray(raw.selectedFiles) ? raw.selectedFiles.filter((id): id is string => typeof id === 'string') : [],
     selectedSkills: Array.isArray(raw.selectedSkills) ? raw.selectedSkills.filter((name): name is string => typeof name === 'string') : [],
@@ -89,6 +107,11 @@ export function normalizeConfigPatch(
 ): PersistedConfig {
   if (!isPlainObject(patch)) throw new SyncError('validation', 'config patch must be an object')
   const next: PersistedConfig = { ...current }
+  if (patch.backend !== undefined) next.backend = assertBackend(patch.backend)
+  if (patch.gitUrl !== undefined) {
+    next.gitUrl = typeof patch.gitUrl === 'string' && patch.gitUrl.trim() === '' ? '' : assertGitUrl(patch.gitUrl)
+  }
+  if (patch.gitBranch !== undefined) next.gitBranch = assertGitBranch(patch.gitBranch)
   if (patch.syncDir !== undefined) {
     next.syncDir = patch.syncDir === '' ? '' : assertSyncDir(patch.syncDir, home)
   }

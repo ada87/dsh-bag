@@ -40,7 +40,9 @@ Imported skills are added to the capability pack automatically.
 
 ### Sync the pack
 
-1. Enter an absolute **sync folder** outside the dsh home, for example `D:\sync\dsh-bag` or `~/Sync/dsh-bag`.
+1. Choose a **delivery**: a synced folder, or a **Git repository**.
+   - Folder: an absolute path outside the dsh home, for example `D:\sync\dsh-bag`.
+   - Git: a remote such as `git@github.com:you/dsh-bag-config.git` and a branch (default `main`). Authentication uses your existing git environment; credentials are never stored.
 2. Tick the settings namespaces, profile files, user presets and skills you want to travel; enable hooks if needed.
 3. **Save**.
 4. On the source machine press **Publish this machine**.
@@ -96,12 +98,12 @@ They are stripped before capture and are never overwritten by a peer.
 ## How it works
 
 ```
-<sync folder>/
+<folder or git repo>/
   meta.json
   devices/<deviceId>.json     ← every device writes only its own snapshot
 ```
 
-- Each device owns one snapshot file, so a "dumb" sync client never makes two machines overwrite the same file.
+- Each device owns one snapshot file, so a "dumb" sync client never makes two machines overwrite the same file. The Git backend keeps its sidecar checkout under `<DSH_HOME>/state/dsh-bag/git` and commits after each publish; pushes retry once after a pull, and device files never overlap.
 - Items carry their own timestamp: pushing an unchanged item keeps its old timestamp.
 - Compare is a three-way merge: **base** (last accepted), **local** (live), **remote** (newest across devices). Maps merge by key; arrays and scalars are atomic.
 - Applying a remote change is journaled: raw files are backed up, settings edits are paired with a compensation edit, and an interrupted write can be repaired from **Settings → Bag → Repair**.
@@ -119,7 +121,7 @@ They are stripped before capture and are never overwritten by a peer.
 ## v1 limitations
 
 - **Import is Claude Code skills only.** MCP servers, hooks and flat `<name>.md` skills are deferred; user presets are synced but not imported.
-- **Folder backend only.** Git and WebDAV backends are intentionally deferred; the engine is written behind a small backend seam.
+- **Git is a sidecar.** Local changes are committed to `<DSH_HOME>/state/dsh-bag/git`; the backend never checks out into your worktrees. Authentication must be non-interactive (credential helper or SSH key).
 - **Whole-skill deletion is not propagated.** File-level changes inside a skill merge; removing a selected skill from every machine is manual.
 - **One backup file, no history.** A `.dshbag` is a snapshot; exporting again does not keep older bundles.
 - **Live settings only.** A settings namespace is selectable only when its schema declares at least one `volatile` field, because that is what `ctx.settings.mutate()` accepts. Settings that require a restart are disabled in the picker.
@@ -164,6 +166,7 @@ src/engine.ts     capture / plan / apply / push / doctor / recover
 src/skills.ts     skill directory snapshots and safe writes
 src/import/       Claude Code scan + import adapters
 src/backend.ts    folder backend (device snapshots)
+src/backend-git.ts Git sidecar backend (commit + push, files never overlap)
 src/merge.ts      three-way merge, path edits, preview diff
 src/policy.ts     item allowlist and path validation
 src/secret-scan.ts

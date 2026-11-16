@@ -56,7 +56,7 @@ export interface PlanItem {
 export interface SyncPlan {
   id: string
   createdAt: number
-  source: 'folder' | 'bundle'
+  source: 'folder' | 'git' | 'bundle'
   syncDir: string
   items: PlanItem[]
   warnings: string[]
@@ -77,7 +77,10 @@ export interface StatusCounts {
 export interface Status {
   schemaVersion: 1
   configured: boolean
+  backend: 'folder' | 'git'
   syncDir: string
+  gitUrl: string
+  gitBranch: string
   device: DeviceIdentity
   auth: 'trusted'
   settingsWritable: boolean
@@ -123,7 +126,10 @@ export interface PersistedConfig {
   schemaVersion: 1
   deviceId: string
   deviceName: string
+  backend: 'folder' | 'git'
   syncDir: string
+  gitUrl: string
+  gitBranch: string
   selectedNamespaces: string[]
   selectedFiles: string[]
   selectedSkills: string[]
