@@ -1,10 +1,8 @@
 # DSH Bag
 
 [![npm version](https://img.shields.io/npm/v/dsh-bag?color=3d7bfd)](https://www.npmjs.com/package/dsh-bag)
-[![npm downloads](https://img.shields.io/npm/dm/dsh-bag?color=3d7bfd)](https://www.npmjs.com/package/dsh-bag)
 [![license](https://img.shields.io/npm/l/dsh-bag?color=3d7bfd)](https://github.com/ada87/dsh-bag/blob/main/LICENSE)
 [![dsh](https://img.shields.io/badge/dsh-0.2.x-3d7bfd)](https://github.com/ada87/dsh-bag/blob/main/docs/COMPATIBILITY.md)
-[![GitHub stars](https://img.shields.io/github/stars/ada87/dsh-bag?color=3d7bfd&logo=github)](https://github.com/ada87/dsh-bag)
 
 Portable capability packs for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`).
 
