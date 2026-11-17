@@ -1,4 +1,10 @@
-# dsh-bag
+# DSH Bag
+
+[![npm version](https://img.shields.io/npm/v/dsh-bag?color=3d7bfd)](https://www.npmjs.com/package/dsh-bag)
+[![npm downloads](https://img.shields.io/npm/dm/dsh-bag?color=3d7bfd)](https://www.npmjs.com/package/dsh-bag)
+[![license](https://img.shields.io/npm/l/dsh-bag?color=3d7bfd)](https://github.com/ada87/dsh-bag/blob/main/LICENSE)
+[![dsh](https://img.shields.io/badge/dsh-0.2.x-3d7bfd)](https://github.com/ada87/dsh-bag/blob/main/docs/COMPATIBILITY.md)
+[![GitHub stars](https://img.shields.io/github/stars/ada87/dsh-bag?color=3d7bfd&logo=github)](https://github.com/ada87/dsh-bag)
 
 Portable capability packs for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`).
 
@@ -14,27 +20,35 @@ Claude Code  →    skills / presets   →    folder / Git / .dshbag
 skills            hooks / AGENTS.md        Door Cloud (later)
 ```
 
+## Features
+
+- **Bring skills in.** Scan Claude Code skills, review compatibility badges, and import selected directories into `~/.dsh/skills`.
+- **One pack, every machine.** Selected settings namespaces, user presets, hooks and profile files travel together.
+- **Three deliveries.** A synced folder, a Git repository, or one password-encrypted `.dshbag` file.
+- **Nothing secret leaves.** Secret-shaped fields are redacted before capture; credentials are never stored.
+- **Explicit confirmation.** Hooks, patches and AGENTS.md are executable changes and always require a checkbox.
+
 ## Install
 
 ```sh
 dsh plugin --profile web add dsh-bag
 ```
 
-Restart `dsh web`, then open **Settings → Bag**.
+Restart `dsh web`, then open **Settings → DSH Bag**.
 
 Compatibility: [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
 
-## Use
+## Usage
 
-- Open **Settings → Bag** to scan Claude Code skills, choose what travels, and save the pack.
+- Open **Settings → DSH Bag** to scan Claude Code skills, choose what travels, and save the pack.
 - Pick a delivery: a synced folder, a Git remote, or an exportable `.dshbag` file.
 - On another machine press **Compare**, review the plan, then **Apply**. Executable items require confirmation.
 
-## Quick start
+### Quick start
 
 ### Import skills from Claude Code
 
-- Open **Settings → Bag → Skills → Scan Claude Code**.
+- Open **Settings → DSH Bag → Skills → Scan Claude Code**.
 - Review the compatibility badges; import the selected directories into `~/.dsh/skills` (or `~/.agents/skills` if you choose the shared root).
 - Or use chat:
 
@@ -114,7 +128,7 @@ They are stripped before capture and are never overwritten by a peer.
 - Each device owns one snapshot file, so a "dumb" sync client never makes two machines overwrite the same file. The Git backend keeps its sidecar checkout under `<DSH_HOME>/state/dsh-bag/git` and commits after each publish; pushes retry once after a pull, and device files never overlap.
 - Items carry their own timestamp: pushing an unchanged item keeps its old timestamp.
 - Compare is a three-way merge: **base** (last accepted), **local** (live), **remote** (newest across devices). Maps merge by key; arrays and scalars are atomic.
-- Applying a remote change is journaled: raw files are backed up, settings edits are paired with a compensation edit, and an interrupted write can be repaired from **Settings → Bag → Repair**.
+- Applying a remote change is journaled: raw files are backed up, settings edits are paired with a compensation edit, and an interrupted write can be repaired from **Settings → DSH Bag → Repair**.
 - A plan is refused if the local file or the remote folder changed after you reviewed it.
 
 ## Safety
@@ -180,7 +194,7 @@ src/policy.ts     item allowlist and path validation
 src/secret-scan.ts
 src/journal.ts    backup + compensation log
 src/routes.ts     /dsh-bag HTTP API
-client/client.js  Settings → Bag
+client/client.js  Settings → DSH Bag
 ```
 
 State lives under `<DSH_HOME>/state/dsh-bag/`: `config.json`, `state.json`, `journal.json`, `backups/`.

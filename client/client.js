@@ -16,8 +16,8 @@ window.__ModuleLoader__.load({
     const API = '/dsh-bag/api'
 
     const zh = {
-      nav: '配置袋',
-      title: '配置袋',
+      nav: 'DSH Bag',
+      title: 'DSH Bag',
       desc: '把选中的设置和配置文件装进一个同步文件夹，换台机器打开就有。默认只同步你勾选的内容；密钥类字段不会离开本机。',
       folder: '同步文件夹',
       folderHint: '填一个你已经在同步的目录，例如 iCloud、OneDrive、Dropbox、Syncthing 或网络盘。',
@@ -109,8 +109,8 @@ window.__ModuleLoader__.load({
     }
 
     const en = {
-      nav: 'Bag',
-      title: 'Bag',
+      nav: 'DSH Bag',
+      title: 'DSH Bag',
       desc: 'Put selected settings and profile files into one synced folder; another machine opens it and has them. Only checked items travel, and secret-shaped values never leave the machine.',
       folder: 'Sync folder',
       folderHint: 'Pick a folder you already sync: iCloud, OneDrive, Dropbox, Syncthing or a network share.',
