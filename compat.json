@@ -1,0 +1,14 @@
+{
+  "plugin": "dsh-bag",
+  "dshRange": ">=0.2.2-rc.1 <0.3.0",
+  "protocol": null,
+  "appMin": null,
+  "entries": [
+    {
+      "dsh": "0.2.2-rc.1",
+      "result": "pending",
+      "testedAt": null,
+      "notes": "Plugin has its own test suite; real-host smoke run not recorded yet."
+    }
+  ]
+}

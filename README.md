@@ -22,6 +22,14 @@ dsh plugin --profile web add dsh-bag
 
 Restart `dsh web`, then open **Settings → Bag**.
 
+Compatibility: [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
+
+## Use
+
+- Open **Settings → Bag** to scan Claude Code skills, choose what travels, and save the pack.
+- Pick a delivery: a synced folder, a Git remote, or an exportable `.dshbag` file.
+- On another machine press **Compare**, review the plan, then **Apply**. Executable items require confirmation.
+
 ## Quick start
 
 ### Import skills from Claude Code

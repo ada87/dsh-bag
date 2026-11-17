@@ -26,7 +26,8 @@
     "sync",
     "config",
     "settings",
-    "profiles"
+    "profiles",
+    "dsh-plugin"
   ],
   "license": "MIT",
   "author": "ada87",
