@@ -1,7 +1,7 @@
 {
   "name": "dsh-bag",
   "version": "0.4.0",
-  "description": "Portable config sync for DeepSeek Harness: selected settings namespaces and profile files travel through any synced folder.",
+  "description": "Portable capability packs for DeepSeek Harness: import Claude Code skills and sync settings, presets, hooks and profiles through a folder, Git, or an encrypted .dshbag.",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
@@ -21,13 +21,15 @@
   },
   "keywords": [
     "dsh",
+    "dsh-plugin",
     "deepseek-harness",
-    "plugin",
+    "skills",
     "sync",
     "config",
     "settings",
     "profiles",
-    "dsh-plugin"
+    "capability-pack",
+    "claude-code"
   ],
   "license": "MIT",
   "author": "ada87",

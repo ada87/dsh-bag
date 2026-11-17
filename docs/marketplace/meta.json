@@ -1,8 +1,8 @@
 {
-  "category": "sync",
+  "category": "skill",
   "descriptions": {
-    "en": "Portable capability packs for DSH: import Claude Code skills, sync settings and profiles through a folder, Git, or an encrypted .dshbag.",
-    "zh": "DSH 的可携带能力包：导入 Claude Code skills，通过文件夹、Git 或加密 .dshbag 同步设置与配置。"
+    "en": "Portable capability packs for DeepSeek Harness: import Claude Code skills and sync settings, presets, hooks and profiles through a folder, Git, or an encrypted .dshbag.",
+    "zh": "DSH 的可携带能力包：导入 Claude Code skills，通过文件夹、Git 或加密 .dshbag 同步设置、预设、hooks 与配置。"
   },
   "screenshots": []
 }
